@@ -6,36 +6,47 @@
 #include <netdb.h>
 #include <string.h>
 
-#define PORT 9000
 
-int main (){
+// Used to recieve UDP packets from a given port
+class PacketReciever{
+public:
 	struct sockaddr_in myaddr;
 	struct sockaddr_in remoteaddr;
-	socklen_t addrlen = sizeof(remoteaddr);
 	int recvlen;
-	unsigned char buf[2000];	
+	unsigned char buf[2000];
+	socklen_t addrlen = sizeof(remoteaddr);
+	int sockfd;	
+	int port;
+	PacketReciever(int p): port(p){
+		if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0){
+			std::cout << "Failed to create socket: " << errno << std::endl;
+			exit(0);	
+		}
+		
+		memset((char*)&myaddr, 0, sizeof(myaddr));
+		myaddr.sin_family = AF_INET;
+		myaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+		myaddr.sin_port = htons(port);
 
-	int fd;
-	if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0){
-		std::cout << "Failed to create socket: " << errno << std::endl;
-		exit(0);	
+		if(bind(sockfd, (struct sockaddr *)&myaddr, sizeof(myaddr)) < 0){
+			std::cout << "Failed to bind" << errno << std::endl;
+			exit(0);
+		}
+	}	
+
+	void startListening(){
+		for(;;){
+			std::cout << "Listening on port " << port << std::endl;
+			recvlen = recvfrom(sockfd, buf, 2000, 0, (struct sockaddr *)&remoteaddr, &addrlen);
+			std::cout << "Recieved " << recvlen	<< " bytes" << std::endl; 
+			std::cout << "Data: " << buf << std::endl;
+		}
 	}
-	
-	memset((char*)&myaddr, 0, sizeof(myaddr));
-	myaddr.sin_family = AF_INET;
-	myaddr.sin_addr.s_addr = htonl(INADDR_ANY);
-	myaddr.sin_port = htons(PORT);
+}; 
 
-	if(bind(fd, (struct sockaddr *)&myaddr, sizeof(myaddr)) < 0){
-		std::cout << "Failed to bind" << errno << std::endl;
-		exit(0);
-	}
 
-	for(;;){
-		std::cout << "Listeneing on port" << PORT << std::endl;
-		recvlen = recvfrom(fd, buf, 2000, 0, (struct sockaddr *)&remoteaddr, &addrlen);
-		std::cout << "Recieved " << recvlen	<< " bytes" << std::endl; 
-	}
-
+int main (){
+	PacketReciever reciever(9000);
+	reciever.startListening();
 	return 1;
 }

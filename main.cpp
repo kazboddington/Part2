@@ -54,7 +54,7 @@ public:
 		
 		sockaddr_in addrListen; // zero-int, sin_port is 0, which picks a random port for bind.
 		addrListen.sin_family = AF_INET;
-		addrListen.sin_port = 1112;
+		addrListen.sin_port = htons(10000) ;
 	
 		result = bind(sock, (sockaddr*)&addrListen, sizeof(addrListen));
 		if (result == -1)
@@ -75,10 +75,10 @@ public:
 	}
 
 	int sendPacket(const char* msg){
-
 		size_t msg_length = strlen(msg);
 		sendPacket(msg, msg_length);
 	}
+
 	int sendPacket(const char* msg, int length){
 		int result = sendto(sock, msg, length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
 		std::cout << result << " bytes sent" << std::endl;
