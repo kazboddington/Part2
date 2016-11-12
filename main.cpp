@@ -19,10 +19,14 @@ public:
 	int sock;	
 	const char* destinationIp; 	
 	const char* destinationPort;
+
 	PacketSender(const char* destIp, const char* destPort): destinationIp(destIp), destinationPort(destPort){
 		prepareSocket();	
 	}
 
+	~PacketSender(){
+		close(sock);
+	}
 
 	int resolvehelper(const char* hostname, int family, const char* service, sockaddr_storage* pAddr)
 	{
@@ -48,8 +52,10 @@ public:
 		sock = socket(AF_INET, SOCK_DGRAM, 0);
 		char szIP[100];
 		
-		sockaddr_in addrListen = {}; // zero-int, sin_port is 0, which picks a random port for bind.
+		sockaddr_in addrListen; // zero-int, sin_port is 0, which picks a random port for bind.
 		addrListen.sin_family = AF_INET;
+		addrListen.sin_port = 1112;
+	
 		result = bind(sock, (sockaddr*)&addrListen, sizeof(addrListen));
 		if (result == -1)
 		{
