@@ -35,9 +35,10 @@ void PacketReciever::startListening(){
 	}
 }
 
-
+/*	
 int main (){
 	PacketReciever reciever(9000);
 	reciever.startListening();
 	return 1;
 }
+*/

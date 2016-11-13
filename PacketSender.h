@@ -4,6 +4,15 @@
 #include <sys/socket.h>
 
 
+typedef struct Packets{
+	unsigned char type;
+	unsigned char dataSize;
+	unsigned int seqNum;
+	unsigned int ackNum;
+	unsigned short windowNum;
+	unsigned char data[1024];	
+}Packet;
+
 class PacketSender{
 
 private:
@@ -13,14 +22,16 @@ private:
 	const char* destinationPort;
 
 public:
+
+	
 	PacketSender(const char* destIp, const char* destPort);
-	~Pack	g++ -o sender main.o PacketSender.o
-	g++ -o reciver PacketReciever.oetSender();
+	~PacketSender();
 	int resolvehelper(const char* hostname, int family, const char* service, sockaddr_storage* pAddr);
 	
 	int prepareSocket();
 	int sendPacket(const char* msg);
 	int sendPacket(const char* msg, int length);
+	int sendPacket(Packet *p);
 };
 
 #endif
