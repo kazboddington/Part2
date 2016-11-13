@@ -30,10 +30,20 @@ void PacketReciever::startListening(){
 	for(;;){
 		std::cout << "Listening on port " << port << std::endl;
 		recvlen = recvfrom(sockfd, buf, 2000, 0, (struct sockaddr *)&remoteaddr, &addrlen);
-		std::cout << "Recieved " << recvlen	<< " bytes" << std::endl; 
-		std::cout << "Data: " << buf << std::endl;
+		//std::cout << "Recieved " << recvlen	<< " bytes" << std::endl; 
+		//std::cout << "Data: " << buf << std::endl;
 	}
 }
+
+	
+Packet PacketReciever::listenOnce(){
+	Packet returnPacket;
+	recvlen = recvfrom(sockfd, reinterpret_cast<unsigned char*>(&returnPacket), 2000, 0, (struct sockaddr *)&remoteaddr, &addrlen);
+//	std::cout << "Recieved " << recvlen	<< " bytes" << std::endl; 
+	
+	return returnPacket;	
+}
+
 
 /*	
 int main (){

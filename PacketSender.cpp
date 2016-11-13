@@ -15,7 +15,10 @@
 
 #include "PacketSender.h"
 
-PacketSender::PacketSender(const char* destIp, const char* destPort): destinationIp(destIp), destinationPort(destPort){
+PacketSender::PacketSender(
+	const char* destIp,
+	const char* destPort): destinationIp(destIp), destinationPort(destPort)
+{
 	prepareSocket();	
 }
 
@@ -23,7 +26,11 @@ PacketSender::~PacketSender(){
 	close(sock);
 }
 
-int PacketSender::resolvehelper(const char* hostname, int family, const char* service, sockaddr_storage* pAddr)
+int PacketSender::resolvehelper(
+	const char* hostname, 
+	int family,
+	const char* service,
+	sockaddr_storage* pAddr)
 {
 	int result;
 	addrinfo* result_list = NULL;
@@ -41,7 +48,8 @@ int PacketSender::resolvehelper(const char* hostname, int family, const char* se
 	return result;
 }
 
-int PacketSender::prepareSocket(){
+int PacketSender::prepareSocket()
+{
 	// Set up socket and bind it to a  high random sending port
 	int result = 0;
 	sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -49,7 +57,7 @@ int PacketSender::prepareSocket(){
 	
 	sockaddr_in addrListen = {}; // zero-int, sin_port is 0, which picks a random port for bind.
 	addrListen.sin_family = AF_INET;
-	addrListen.sin_port = htons(9999) ;
+	addrListen.sin_port = 0; // htons(9999); Change this to send from a specific port
 
 	result = bind(sock, (sockaddr*)&addrListen, sizeof(addrListen));
 	if (result == -1)
@@ -71,21 +79,24 @@ int PacketSender::prepareSocket(){
 	}
 }
 
-int PacketSender::sendPacket(const char* msg){
+int PacketSender::sendPacket(const char* msg)
+{
 	size_t msg_length = strlen(msg);
 	sendPacket(msg, msg_length);
 }
 
-int PacketSender::sendPacket(const char* msg, int length){
+int PacketSender::sendPacket(const char* msg, int length)
+{
 	int result = sendto(sock, msg, length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
-	std::cout << result << " bytes sent" << std::endl;
+	//std::cout << result << " bytes sent" << std::endl;
 	if (result < 0){
 		std::cout << "Error occurred: " << errno << std::endl;
 		perror("Error: ");
 	}		
 }
 
-int PacketSender::sendPacket(Packet *p){
+int PacketSender::sendPacket(Packet *p)
+{
 	size_t msg_length = sizeof(Packet);
 	sendPacket(reinterpret_cast<const char*>(p), msg_length);
 }

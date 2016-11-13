@@ -5,23 +5,30 @@
 #include <string>	
 #include <string.h>
 
+#define SOURCE_PORT "10000"	
+#define DESTINATION_PORT "9000"
+
 void sender(){
 	Packet p;
-	unsigned char myChar = 50;
-	p.type = myChar;
-	PacketSender s = PacketSender("127.0.0.1","9000");
-
-	s.sendPacket(&p);
+	PacketSender s = PacketSender("127.0.0.1",SOURCE_PORT);
+	int x = 0;
+	for(x; x < 1000; ++x){
+		p.seqNum = x;
+		s.sendPacket(&p);
+	}
 }
 
 int main()
 {	
-	
 	std::thread t1(sender);
 
+	PacketReciever reciever(atoi(SOURCE_PORT));
 	
-	PacketReciever reciever(9000);
-	reciever.startListening();
+	int x = 0;
+	for(x; x<1000; ++x){
+		Packet firstPacket = reciever.listenOnce();
+		std::cout << firstPacket.seqNum << std::endl;
+	}
 	
 	t1.join();
 

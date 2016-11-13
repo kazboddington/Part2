@@ -1,6 +1,8 @@
 #ifndef PACKETRECIEVER_H
 #define PACKETRECIEVER_H
+
 #include <netinet/in.h>
+#include "packetStruct.h"
 
 class PacketReciever{
 
@@ -16,6 +18,7 @@ private:
 public:
 	PacketReciever(int p);
 	void startListening();
+	Packet listenOnce();
 };
 
 #endif

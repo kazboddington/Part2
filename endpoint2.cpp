@@ -8,11 +8,14 @@
 #define SOURCE_PORT "10000"	
 #define DESTINATION_PORT "9000"
 
+/* ENDPOINT 2 - RECIEVING PACKETS FROM ENDPOINT 1 */
+
 void sender(){
 	Packet p;
-	PacketSender s = PacketSender("127.0.0.1",SOURCE_PORT);
+	PacketSender s = PacketSender("127.0.0.1", DESTINATION_PORT);
 	int x = 0;
 	for(x; x < 1000; ++x){
+		std::cout << "Sending Packet: "<< x << std::endl;
 		p.seqNum = x;
 		s.sendPacket(&p);
 	}
@@ -20,18 +23,21 @@ void sender(){
 
 int main()
 {	
-	std::thread t1(sender);
+	// Prepare ACK to send in response
+	Packet p;
+	p.type = ACK;
+	p.windowSize += 2000;
+	
+	PacketSender s = PacketSender("127.0.0.1", DESTINATION_PORT);
 
 	PacketReciever reciever(atoi(SOURCE_PORT));
-	
-	int x = 0;
-	for(x; x<1000; ++x){
-		Packet firstPacket = reciever.listenOnce();
-		std::cout << firstPacket.seqNum << std::endl;
+	while(true){
+		Packet packet = reciever.listenOnce();
+		p.ackNum = packet.seqNum;
+		s.sendPacket(&p);
+		std::cout << "Sending acknowledgent...\n seqNum = " << packet.seqNum << std::endl;
 	}
 	
-	t1.join();
-
 	return 0;
 }
 

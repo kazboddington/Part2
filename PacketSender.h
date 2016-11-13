@@ -2,16 +2,7 @@
 #define PACKETSENDER_H
  
 #include <sys/socket.h>
-
-
-typedef struct Packets{
-	unsigned char type;
-	unsigned char dataSize;
-	unsigned int seqNum;
-	unsigned int ackNum;
-	unsigned short windowNum;
-	unsigned char data[1024];	
-}Packet;
+#include "packetStruct.h"
 
 class PacketSender{
 
@@ -23,7 +14,6 @@ private:
 
 public:
 
-	
 	PacketSender(const char* destIp, const char* destPort);
 	~PacketSender();
 	int resolvehelper(const char* hostname, int family, const char* service, sockaddr_storage* pAddr);
