@@ -35,7 +35,7 @@ class TimerManager
 		std::chrono::duration<double> timeRemaining;
 		std::function<void()> callback;
 	}deltaElement;
- 	 
+ 	std::mutex deltaListMutex;
 	std::list<deltaElement> deltaList;
 	Clock clk;
 public:
@@ -53,6 +53,7 @@ public:
 			std::chrono::duration<double> timePassed = 
 				std::chrono::duration_cast<std::chrono::duration<double>>(t2-t1);
 			//std::cout << "time passed: " << timePassed.count() << "seconds" << std::endl;
+			deltaListMutex.lock();
 			while(deltaList.size() > 0 && timePassed > std::chrono::duration<double>::zero()){
 				deltaList.front().timeRemaining -= timePassed;	
 
@@ -65,13 +66,14 @@ public:
 					break;
 				}	
 			}
+			deltaListMutex.unlock();
 			t1 = t2;
 		}
 	}
 
 	void addTask(std::chrono::duration<double> delay, std::function<void()> callback)
 	{	
-		
+		std::lock_guard<std::mutex> deltaListLockGuard(deltaListMutex);	
 		std::cout << "adding task. deltaList Length:" << deltaList.size()<< std::endl;
 		if(deltaList.size() == 0){
 			deltaElement newElement{delay, callback};
@@ -221,9 +223,11 @@ int main()
 	// Queue callback on the timer manager
 	TimerManager timerManager;	
 	int i = 0;
+	std::function<void()> manageFunction = std::bind(&TimerManager::manageTasks, &timerManager);
+	std::thread timerThread(manageFunction);
 	for(i; i<10000; ++i){
 		std::chrono::duration<double, std::nano> timeForTask(i);
-		Packet p;	
+		Packet p;
 		p.seqNum = i;
 		//create calback on timer. The callback queue a packet to be sent by the sender thread	
 		std::function<void(Packet)> sendBlankPacket1 = 
@@ -233,7 +237,6 @@ int main()
 		timerManager.addTask(timeForTask, sendBlankPacket2);
 	}
 	
-	timerManager.manageTasks();
 	senderThread.join();
 	return 0;
 }
