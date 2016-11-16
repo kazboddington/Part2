@@ -57,7 +57,7 @@ int PacketSender::prepareSocket()
 	
 	sockaddr_in addrListen = {}; // zero-int, sin_port is 0, which picks a random port for bind.
 	addrListen.sin_family = AF_INET;
-	addrListen.sin_port = 0; // htons(9999); Change this to send from a specific port
+	addrListen.sin_port = 0; // htons(9999); Change this to send from a specific por  t
 
 	result = bind(sock, (sockaddr*)&addrListen, sizeof(addrListen));
 	if (result == -1)
