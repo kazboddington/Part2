@@ -9,6 +9,11 @@
 #include <list>
 #include <ctime>
 #include <chrono>	
+#include <vector>
+#include <fstream>
+#include <iterator>
+#include <algorithm>
+#include <iostream>
 
 #define SOURCE_PORT "9000"
 #define DESTINATION_PORT "10000"
@@ -16,17 +21,16 @@
 /* ENDPOINT 1 - SEDNING PACKETS TO ENDPOINT */ 
 
 typedef std::chrono::high_resolution_clock Clock;
-std::mutex windowMutex;
-std::condition_variable windowCV;
-short remainingWindow = 2120; // Initalised to be this value - would usually be from 3 way handshake 
 
-typedef struct Window{
-	int startByte;
-	int windowSize;
-	int section;
-	std::mutex windowMutex;
-} window;
+typedef struct SenderWindow{
+	int startByte;						/* The beginning byte of the window */
+	int windowSize;						/* The size of the window */
+	int sentTo;							/* The NEXT byte to send (i.e. starts at byte 0) */
+	std::mutex windowMutex;				/* Mutex to protect window's access */
+	std::condition_variable windowCV;   /* Condition Variable to allow for waiting on window's changes */
+} SenderWindow;
 
+SenderWindow window;
 
 class TimerManager
 {	
@@ -151,47 +155,6 @@ public:
 
 PacketSender packetSender = PacketSender("127.0.0.1",DESTINATION_PORT);
  
-//void sender(){
-//	Packet p;
-//	int x = 0;
-//
-//	std::unique_lock<std::mutex> windowLock(windowMutex);
-//	for(x; x < 10; ++x){
-//		/* Window lock is for the remaining window.                                        */
-//		/* This thread waits on the window lock to be above 0 if enough data has been sent */
-//		std::cout << "Window Size: " << remainingWindow << std::endl; 
-//		if (remainingWindow < 0){
-//			std::cout << "Sent all I can at the moment, waiting for ACK..." << std::endl;
-//			while(remainingWindow < 0) windowCV.wait(windowLock);
-//		}
-//		std::cout << "Sending Packet: " << x << std::endl;
-//		p.seqNum = x;
-//		packetSender.sendPacket(&p);
-//		remainingWindow -= sizeof(Packet);
-//	}
-//}
-//
-
-
-void recieveAcksAndAdjustWindow()
-{
-	PacketReciever reciever(atoi(SOURCE_PORT));
-	int x = 0;
-	for(;;){
-		Packet p = reciever.listenOnce();
-		switch(p.type)
-		{
-			case(DATA):
-				std::cout << p.dataSize << " data bytes recieved: " << p.data << std::endl;
-				break;
-			case(ACK):
-				std::cout << "Acknowledge recieved. AckNum: " << p.ackNum;
-				std::cout << "\tWindow Size: " << remainingWindow << std::endl;
-				remainingWindow += 2000; 
-				windowCV.notify_all();		
-		}
-	}
-}
 
 void printSomething(){
 	std::cout << "WORKED" << std::endl;
@@ -205,38 +168,81 @@ void noAckRecievedCallback(int sequenceNumber){
 	std::cout << "No Ack recieved - resending packet " << sequenceNumber << std::endl;
 }
 
+void sendBufferWindowed(std::vector<char> &dataToSend, SenderThread &senderObject){
+	
+	std::cout << "sending windowed data. DataSize = " << dataToSend.size()<< std::endl;
+	window.windowCV.notify_all();
+	std::unique_lock<std::mutex> lock(window.windowMutex);
+	bool allDataSent = false;
+	while(!allDataSent){
+		window.windowCV.wait(lock, []{return window.sentTo < window.windowSize;});	
+		while(window.sentTo < window.windowSize){
+			//Check if we've sent all the data
+			if(window.sentTo >= dataToSend.size()){ 
+				std::cout << "Sent all data!" << std::endl;
+				allDataSent = true;	
+				break; 
+			}
+			// Set up packet to send
+			Packet p;
+			p.type = DATA;
+			p.dataSize = std::min(
+				std::min(window.sentTo - window.startByte + window.windowSize,  1024),
+				(int)dataToSend.size());
+			p.seqNum = window.sentTo;
+
+			int endByte = window.sentTo + p.dataSize;
+			std::copy(dataToSend.begin() + window.sentTo, dataToSend.end() + endByte, p.data);
+		
+			//adjust sentTo pointer since we've sent a packet
+			window.sentTo += p.dataSize;	
+
+			//send the packet
+			senderObject.sendPacket(p);
+			std::cout << "Sent packet: dataSize = " << p.dataSize << " seqNum = " << p.seqNum << std::endl;
+		}	
+	}
+}	
+
+std::vector<char> readFileIntoBuffer(std::string filename){
+	std::ifstream input(filename, std::ios::binary);
+	return std::vector<char>((std::istreambuf_iterator<char>(input)),
+		(std::istreambuf_iterator<char>()));
+}
+
 int main()
 {
-	//std::thread t1(sender);
-	//recieveAcksAndAdjustWindow();
-	//t1.join();
+	// initialise window values	
+	window.windowSize = 2000;
+	window.startByte = 0;
+	window.sentTo = 0;
 	
-
 	// Make packet sender to consume output packets and spawn it
 	PacketSender packetSender = PacketSender("127.0.0.1",DESTINATION_PORT);
 	SenderThread senderThreadObj(packetSender);
 	std::thread	senderThread = senderThreadObj.spawn();
-
-
-	//TODO move the timer to a separate thread
 
 	// Queue callback on the timer manager
 	TimerManager timerManager;	
 	int i = 0;
 	std::function<void()> manageFunction = std::bind(&TimerManager::manageTasks, &timerManager);
 	std::thread timerThread(manageFunction);
-	for(i; i<10000; ++i){
-		std::chrono::duration<double, std::nano> timeForTask(i);
-		Packet p;
-		p.seqNum = i;
-		//create calback on timer. The callback queue a packet to be sent by the sender thread	
-		std::function<void(Packet)> sendBlankPacket1 = 
-			(std::bind(&SenderThread::sendPacket, &senderThreadObj, std::placeholders::_1));
-		std::function<void()> sendBlankPacket2 = (std::bind(sendBlankPacket1, p));
-		std::cout << "calling time: " << i << std::endl;
-		timerManager.addTask(timeForTask, sendBlankPacket2);
-	}
+	std::vector<char> dataToSend = readFileIntoBuffer("./fileToSend.txt");		
+	sendBufferWindowed(dataToSend, senderThreadObj);
+//	for(i; i<22; ++i){
+//		std::chrono::duration<double> timeForTask(i);
+//		Packet p;
+//		p.seqNum = i*10;
+//		p.dataSize = 10;
+//		for(int j = 0; j < 1024; ++j) p.data[j] = 'H';
+//		//create calback on timer. The callback queue a packet to be sent by the sender thread	
+//		std::function<void(Packet)> sendBlankPacket1 = 
+//			(std::bind(&SenderThread::sendPacket, &senderThreadObj, std::placeholders::_1));
+//		std::function<void()> sendBlankPacket2 = (std::bind(sendBlankPacket1, p));
+//		timerManager.addTask(timeForTask, sendBlankPacket2);
+//	}
 	
+	timerThread.join();	
 	senderThread.join();
 	return 0;
 }
