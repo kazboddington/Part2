@@ -1,5 +1,3 @@
-#include "PacketSender.h"
-#include "PacketReciever.h"
 #include <iostream>
 #include <thread>
 #include <string>	
@@ -14,6 +12,11 @@
 #include <iterator>
 #include <algorithm>
 #include <iostream>
+
+
+#include "PacketSender.h"
+#include "PacketReciever.h"
+#include "SenderThread.h"
 
 #define SOURCE_PORT "9000"
 #define DESTINATION_PORT "10000"
@@ -82,7 +85,7 @@ public:
 		
 		std::cout << "adding task..." << std::endl;	
 		std::lock_guard<std::mutex> deltaListLockGuard(deltaListMutex);	
-		
+
 		//Case that it's the 11st item
 		if(deltaList.size() == 0){
 			deltaElement newElement{delay, callback};
@@ -114,47 +117,6 @@ public:
 };
 
 
-class SenderThread{
-	/* This thread is used manage the output buffer and send packets safely */
-
-	std::list<Packet> outputBuffer;
-	std::mutex bufferMutex;
-	int bufferCounter = 0;
-	std::condition_variable bufferCV;	
-	PacketSender packetSender;
-public:
-	SenderThread(PacketSender &s): packetSender(s){}
-
-	
-	std::thread spawn(){
-		return std::thread([=]{ mainLoop(); });
-	}				
-	
-	void mainLoop(){
-	/* Loop through buffer constantly, sending buffered packets */	
-		std::unique_lock<std::mutex> lk(bufferMutex);	
-		while(true){
-			bufferCV.wait(lk, [this]{return bufferCounter > 0;});
-			Packet nextToSend = outputBuffer.back();
-			outputBuffer.pop_back();
-			bufferCounter--;
-			bufferCV.notify_all();
-			packetSender.sendPacket(&nextToSend);
-			std::cout << "Packet Sent. seqNum = "<< nextToSend.seqNum << std::endl;
-		}
-	}
-
-	void sendPacket(Packet p){
-	/* This should add the packet to the output buffer, ready to be sent when it can. */
-		{
-			std::lock_guard<std::mutex> lock(bufferMutex);
-			outputBuffer.push_front(p);
-			bufferCounter++;
-			std::cout << "Packet added to output Queue. seqNum = "<< p.seqNum << std::endl;
-		}
-		bufferCV.notify_all();
-	}
-};
 
 /* The shared sender for this endpoint */
 
