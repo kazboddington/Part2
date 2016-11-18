@@ -23,9 +23,9 @@
 typedef std::chrono::high_resolution_clock Clock;
 
 typedef struct SenderWindow{
-	int startByte;						/* The beginning byte of the window */
-	int windowSize;						/* The size of the window */
-	int sentTo;							/* The NEXT byte to send (i.e. starts at byte 0) */
+	unsigned int startByte;						/* The beginning byte of the window */
+	unsigned int windowSize;						/* The size of the window */
+	unsigned int sentTo;							/* The NEXT byte to send (i.e. starts at byte 0) */
 	std::mutex windowMutex;				/* Mutex to protect window's access */
 	std::condition_variable windowCV;   /* Condition Variable to allow for waiting on window's changes */
 } SenderWindow;
@@ -62,7 +62,9 @@ public:
 				deltaList.front().timeRemaining -= timePassed;	
 
 				if(deltaList.front().timeRemaining < std::chrono::duration<double>::zero()){
+					deltaListMutex.unlock();
 					deltaList.front().callback();
+					deltaListMutex.lock();
 					timePassed = deltaList.front().timeRemaining;
 					if (timePassed.count() < 0) timePassed = -timePassed;
 					deltaList.pop_front();
@@ -77,14 +79,19 @@ public:
 
 	void addTask(std::chrono::duration<double> delay, std::function<void()> callback)
 	{	
+		
+		std::cout << "adding task..." << std::endl;	
 		std::lock_guard<std::mutex> deltaListLockGuard(deltaListMutex);	
-		std::cout << "adding task. deltaList Length:" << deltaList.size()<< std::endl;
+		
+		//Case that it's the 11st item
 		if(deltaList.size() == 0){
 			deltaElement newElement{delay, callback};
 			deltaList.push_front(newElement);
 			std::cout << "Packet added to empyy deltaList. Calling in " << delay.count() << " seconds" << std::endl;
 			return;
 		}
+
+		//case that there are already items in the list
 		for(std::list<deltaElement>::iterator it = deltaList.begin(); it != deltaList.end(); ++it){
 			delay -= it->timeRemaining;	
 			if (delay < std::chrono::duration<double>::zero()){
@@ -98,9 +105,8 @@ public:
 				return;
 			}
 		}
+		// If we get here, then our item has the longest delay, so we add it to the back
 		deltaList.push_back(deltaElement{delay, callback});	
-	
-		
 	}
 	void removeTask(){
 		//TODO			
@@ -160,15 +166,22 @@ void printSomething(){
 	std::cout << "WORKED" << std::endl;
 }
 
-/* Adjust the window, resend packet that has been lost */
-void noAckRecievedCallback(int sequenceNumber){
-	Packet p;
-	p.seqNum = sequenceNumber;
-	packetSender.sendPacket(&p);
-	std::cout << "No Ack recieved - resending packet " << sequenceNumber << std::endl;
+void resendPacket(Packet p, SenderThread &senderObject, TimerManager &timerManager){
+	// NOTE currently don't take any lock for the window 
+	// since we only read it - may need rectifying in future
+	std::cout << "Checking to see if packet needs resending" << std::endl;
+	std::cout << "\t seqNum = " << p.seqNum << " Window starts at byte " << window.startByte << std::endl;
+	if(p.seqNum >= window.startByte){
+		senderObject.sendPacket(p);
+		// Need to schedule for packet to be resent again	
+		std::chrono::duration<double> timeForTask(3);
+		std::function<void()> timeoutRetransmit(std::bind(resendPacket, p, 
+			std::ref(senderObject), std::ref(timerManager)));
+		timerManager.addTask(timeForTask, timeoutRetransmit);
+	}
 }
 
-void sendBufferWindowed(std::vector<char> &dataToSend, SenderThread &senderObject){
+void sendBufferWindowed(std::vector<char> &dataToSend, SenderThread &senderObject, TimerManager &timerManager){
 	
 	std::cout << "sending windowed data. DataSize = " << dataToSend.size()<< std::endl;
 	window.windowCV.notify_all();
@@ -187,8 +200,8 @@ void sendBufferWindowed(std::vector<char> &dataToSend, SenderThread &senderObjec
 			Packet p;
 			p.type = DATA;
 			p.dataSize = std::min(
-				std::min(window.sentTo - window.startByte + window.windowSize,  1024),
-				(int)dataToSend.size());
+				std::min(window.sentTo - window.startByte + window.windowSize,  (unsigned int)10),
+				(unsigned int)dataToSend.size());
 			p.seqNum = window.sentTo;
 
 			int endByte = window.sentTo + p.dataSize;
@@ -200,9 +213,16 @@ void sendBufferWindowed(std::vector<char> &dataToSend, SenderThread &senderObjec
 			//send the packet
 			senderObject.sendPacket(p);
 			std::cout << "Sent packet: dataSize = " << p.dataSize << " seqNum = " << p.seqNum << std::endl;
+
+			// Schedule task of resending packet (will not occur if ACK recieved)	
+			std::chrono::duration<double> timeForTask(3);
+			std::function<void()> timeoutRetransmit(std::bind(resendPacket, p, 
+				std::ref(senderObject), std::ref(timerManager)));
+			timerManager.addTask(timeForTask, timeoutRetransmit);
 		}	
 	}
-}	
+}
+
 
 std::vector<char> readFileIntoBuffer(std::string filename){
 	std::ifstream input(filename, std::ios::binary);
@@ -228,20 +248,23 @@ int main()
 	std::function<void()> manageFunction = std::bind(&TimerManager::manageTasks, &timerManager);
 	std::thread timerThread(manageFunction);
 	std::vector<char> dataToSend = readFileIntoBuffer("./fileToSend.txt");		
-	sendBufferWindowed(dataToSend, senderThreadObj);
-//	for(i; i<22; ++i){
-//		std::chrono::duration<double> timeForTask(i);
-//		Packet p;
-//		p.seqNum = i*10;
-//		p.dataSize = 10;
-//		for(int j = 0; j < 1024; ++j) p.data[j] = 'H';
-//		//create calback on timer. The callback queue a packet to be sent by the sender thread	
-//		std::function<void(Packet)> sendBlankPacket1 = 
-//			(std::bind(&SenderThread::sendPacket, &senderThreadObj, std::placeholders::_1));
-//		std::function<void()> sendBlankPacket2 = (std::bind(sendBlankPacket1, p));
-//		timerManager.addTask(timeForTask, sendBlankPacket2);
-//	}
+	std::thread windowManagerThread(sendBufferWindowed, std::ref(dataToSend),
+		std::ref(senderThreadObj), std::ref(timerManager));
 	
+	// Listen for acknowledgements and update the window	
+	PacketReciever reciever(atoi(SOURCE_PORT));
+	while(true){
+		Packet p = reciever.listenOnce();
+		std::cout << "Recieved ACK, ackNum = " << p.ackNum << std::endl;
+		//TODO something needs to be done to lock the window
+		window.startByte = std::max(window.startByte, p.ackNum);	
+		if(window.startByte >= dataToSend.size()){
+			std::cout << "ALL DATA HAS BEEN ACKNOWLEDGED!!! FINISHED!!!" << std::endl;
+			break;
+		}
+	}
+	
+	windowManagerThread.join();
 	timerThread.join();	
 	senderThread.join();
 	return 0;
