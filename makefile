@@ -5,8 +5,8 @@ SRCS = main.o PacketReciever.o PacketSender.o PacketSender.h PacketReciever.h
 #	gcc $< -c -o $@
 #
 all:
-	g++ -std=c++11 -pthread -o endpoint1 endpoint1.cpp PacketSender.cpp PacketReciever.cpp SenderThread.cpp
-	g++ -std=c++11 -pthread -o endpoint2 endpoint2.cpp PacketSender.cpp PacketReciever.cpp SenderThread.cpp
+	g++ -std=c++11 -pthread -o endpoint1 endpoint1.cpp PacketSender.cpp PacketReciever.cpp SenderThread.cpp TimerManager.cpp
+	g++ -std=c++11 -pthread -o endpoint2 endpoint2.cpp PacketSender.cpp PacketReciever.cpp SenderThread.cpp TimerManager.cpp
 #depend: .depend
 #
 #.depend: $(SRCS)
