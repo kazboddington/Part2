@@ -25,7 +25,7 @@ RecieverWindow window;
 
 unsigned int calculteRecievedTo(){ //note assumes already have safe access to window data
 	int counter = window.recievedTo;
-	for(counter;  counter < bytesRecieved.size(); ++ counter){
+	for(counter;  counter < bytesRecieved.size(); ++counter){
 		if (bytesRecieved[counter] == false) break;
 	}
 	return counter;
@@ -42,6 +42,12 @@ int main()
 	PacketReciever reciever(atoi(SOURCE_PORT));
 	while(true){
 		Packet packet = reciever.listenOnce();
+		
+		// Introduce artificial delay before acknowledging (not realistic currently)	
+		const struct timespec waitime = {0, 100000000};
+		struct timespec remaingTime;
+		nanosleep(&waitime, &remaingTime);			
+		
 		std::cout << "Packet Recieved. seqNum = " << packet.seqNum;
 		std::cout << " dataSize = " << packet.dataSize;
 		std::cout << " RecievedTo = " << window.recievedTo << std::endl;
@@ -62,7 +68,7 @@ int main()
 		window.recievedTo = calculteRecievedTo(); 
 		std::cout << "Recalculated where we're recieved to as: " << window.recievedTo << std::endl;
 		p.ackNum = window.recievedTo;
-		
+		p.seqNum = packet.seqNum; // Tells sender which packet this was in response to, helping calculate RTT		
 		window.windowMutex.unlock();	
 		s.sendPacket(&p);
 		std::cout << "Sending acknowledgent... ackNum = " << p.ackNum << std::endl;

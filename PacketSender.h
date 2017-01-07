@@ -18,10 +18,10 @@ public:
 	~PacketSender();
 	int resolvehelper(const char* hostname, int family, const char* service, sockaddr_storage* pAddr);
 	
-	int prepareSocket();
-	int sendPacket(const char* msg);
-	int sendPacket(const char* msg, int length);
-	int sendPacket(Packet *p);
+	void prepareSocket();
+	void sendPacket(const char* msg);
+	void sendPacket(const char* msg, int length);
+	void sendPacket(Packet *p);
 };
 
 #endif

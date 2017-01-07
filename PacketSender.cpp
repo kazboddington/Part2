@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <iostream>
+#include <chrono>
 
 #include "PacketSender.h"
 
@@ -48,12 +49,11 @@ int PacketSender::resolvehelper(
 	return result;
 }
 
-int PacketSender::prepareSocket()
+void PacketSender::prepareSocket()
 {
 	// Set up socket and bind it to a  high random sending port
 	int result = 0;
 	sock = socket(AF_INET, SOCK_DGRAM, 0);
-	char szIP[100];
 	
 	sockaddr_in addrListen = {}; // zero-int, sin_port is 0, which picks a random port for bind.
 	addrListen.sin_family = AF_INET;
@@ -79,13 +79,13 @@ int PacketSender::prepareSocket()
 	}
 }
 
-int PacketSender::sendPacket(const char* msg)
+void PacketSender::sendPacket(const char* msg)
 {
 	size_t msg_length = strlen(msg);
 	sendPacket(msg, msg_length);
 }
 
-int PacketSender::sendPacket(const char* msg, int length)
+void PacketSender::sendPacket(const char* msg, int length)
 {
 	int result = sendto(sock, msg, length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
 	//std::cout << result << " bytes sent" << std::endl;
@@ -95,8 +95,9 @@ int PacketSender::sendPacket(const char* msg, int length)
 	}		
 }
 
-int PacketSender::sendPacket(Packet *p)
+void PacketSender::sendPacket(Packet *p)
 {
+	// Set the timePoint inside the packer to now
 	size_t msg_length = sizeof(Packet);
 	sendPacket(reinterpret_cast<const char*>(p), msg_length);
 }
