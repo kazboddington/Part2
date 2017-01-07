@@ -38,8 +38,24 @@ typedef struct SenderWindow{
 } SenderWindow;
 SenderWindow window; // This is the window shared window obect
 
-
+typedef struct RttInfo{
+	std::chrono::duration<double> average;	/* Running average of rtt estimation */
+	std::chrono::duration<double> deviataion;/* Deviation of rtt estiamation */
+	std::chrono::duration<double> minRtt; 	/* Smallest RTT seen so far */
+}RttInfo;
+RttInfo rttInfo;
 /* The shared sender for this endpoint */
+
+void adjustRtt(std::chrono::duration<double, std::micro> measurement){
+	std::chrono::duration<double> error = measurement - rttInfo.average;
+	rttInfo.average = rttInfo.average + 0.125*error;
+	if(error.count() < 0) error = -error;
+	rttInfo.deviataion += 0.125*(error- rttInfo.deviataion);
+	if(measurement < rttInfo.minRtt) rttInfo.minRtt = measurement;
+	std::cout << "Adjusted RTT estimate to : " << rttInfo.average.count() << " seconds";
+   	std::cout << " and deviation to : " << rttInfo.deviataion.count() << " seconds";
+	std::cout << " Min RTT is: " << rttInfo.minRtt.count() << " seconds" << std::endl;
+}
 
 void resendPacket(Packet p, SenderThread &senderObject, TimerManager &timerManager){
 	// NOTE currently don't take any lock for the window 
@@ -64,12 +80,8 @@ void resendPacket(Packet p, SenderThread &senderObject, TimerManager &timerManag
 void sendBufferWindowed(std::vector<char> dataToSend, SenderThread &senderObject, TimerManager &timerManager){
 
 	std::cout << "sending windowed data. DataSize = " << dataToSend.size()<< std::endl;
-	//window.windowCV.notify_all();
-	//std::unique_lock<std::mutex> lock(window.windowMutex);
 	bool allDataSent = false;
 	while(!allDataSent){
-		//TODO sort out locking on the window
-		//window.windowCV.wait(lock, []{return window.sentTo < window.windowSize;});	
 		while(window.sentTo < (window.windowSize + window.startByte)){
 			std::cout << "Window: sendTo = " << window.sentTo <<	" windowSize = ";
 			std::cout << window.windowSize << " startByte = " << window.startByte << std::endl;
@@ -86,7 +98,7 @@ void sendBufferWindowed(std::vector<char> dataToSend, SenderThread &senderObject
 					std::min(	(unsigned int)dataToSend.size(),
 					std::min(	(window.startByte + window.windowSize - window.sentTo),
 					std::min(	(unsigned int)dataToSend.size() - window.sentTo-1,
-								(unsigned int)10)));
+								(unsigned int)100)));
 			p.seqNum = window.sentTo;
 			
 			int endByte = std::min(window.sentTo + p.dataSize, (unsigned int)(dataToSend.size()-1));
@@ -107,7 +119,7 @@ void sendBufferWindowed(std::vector<char> dataToSend, SenderThread &senderObject
 			packetSentTimes[p.seqNum] = now;
 			
 			std::cout << "Sent packet: dataSize = " << p.dataSize << " seqNum = " << p.seqNum << std::endl;
-
+			
 			// Schedule task of resending packet (will not occur if ACK recieved)	
 			std::chrono::duration<double> timeForTask(3);
 			std::function<void()> timeoutRetransmit(std::bind(resendPacket, p, 
@@ -131,6 +143,12 @@ int main()
 	window.startByte = 0;
 	window.sentTo = 0;
 	
+	// initialise rtt values with some to start with;
+	rttInfo.average = std::chrono::duration<double>(1);
+	rttInfo.minRtt = std::chrono::duration<double>(1);
+	rttInfo.deviataion = std::chrono::duration<double>(1);
+	
+
 	// Make packet sender to consume output packets and spawn it
 	PacketSender packetSender = PacketSender("127.0.0.1",DESTINATION_PORT);
 	SenderThread senderThreadObj(packetSender);
@@ -147,7 +165,6 @@ int main()
 	// Listen for acknowledgements and update the window	
 	PacketReciever reciever(atoi(SOURCE_PORT));
 	while(true){
-		//TODO something needs to be done to lock the window
 		
 		Packet p = reciever.listenOnce();
 		std::cout << "Recieved ACK, ackNum = " << p.ackNum << std::endl;
@@ -157,11 +174,11 @@ int main()
 		if(got == packetSentTimes.end()){
 			std::cout << "Packet not found in packetSentTimes" << std::endl;
 		}else{
-			auto rtt = std::chrono::high_resolution_clock::now() - got->second;
+			std::chrono::duration<double> rtt = std::chrono::high_resolution_clock::now() - got->second;
 			std::cout << "Packet with seqNum " << got->first << " and RTT " ;
 		   	std::cout << std::chrono::duration_cast<std::chrono::microseconds>(rtt).count();
-		   	std::cout << " microseconds"	<<  std::endl;
-
+		   	std::cout << " microseconds" << std::endl;
+			adjustRtt(rtt);		
 		}
 		
 		window.startByte = std::max(window.startByte, p.ackNum);	

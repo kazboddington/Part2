@@ -46,7 +46,7 @@ int main()
 		// Introduce artificial delay before acknowledging (not realistic currently)	
 		const struct timespec waitime = {0, 100000000};
 		struct timespec remaingTime;
-		nanosleep(&waitime, &remaingTime);			
+		//nanosleep(&waitime, &remaingTime);			
 		
 		std::cout << "Packet Recieved. seqNum = " << packet.seqNum;
 		std::cout << " dataSize = " << packet.dataSize;
