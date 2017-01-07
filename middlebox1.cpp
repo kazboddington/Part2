@@ -1,4 +1,3 @@
-#define LOSS_PROBABILITY 0.01
 #define DELAY 100 /* NOTE defined in ms */
 
 #include <thread>
@@ -17,13 +16,15 @@ void sendPacket(Packet p, PacketSender &packetSender){
 }
 
 int main(int argc, char *argv[]){
-	if (argc != 3){
-		std::cout << "Usage middlebox [IN_PORT] [OUT_PORT]" << std::endl;	
+	if (argc != 4){
+		std::cout << "Usage middlebox [IN_PORT] [OUT_PORT] ";
+		std::cout << "[LOSS_PROB]" << std::endl;	
 		return 0;
 	}
 		
 	char* sourcePort = argv[1];
 	char* destinationPort = argv[2];
+	char* lossProbability = argv[3];
 
 	PacketReciever reciever(atoi(sourcePort));
 	std::cout << "Listening on port " << sourcePort << std::endl; 
@@ -37,7 +38,7 @@ int main(int argc, char *argv[]){
 	while (true){
 		Packet p = reciever.listenOnce();
 		std::cout << "Recieved Packet!" << std::endl;
-		if(LOSS_PROBABILITY != 0){
+		if(lossProbability != 0){
 			int rand = std::rand() % 100;
 			std::cout << rand << std::endl;
 			if (rand != 1){
