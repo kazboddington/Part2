@@ -10,6 +10,8 @@
 #define FLOW2_DEST "5000"
 #define FLOW1_SOURCE "2000"
 #define FLOW2_SOURCE "3000"
+#define PACKET_SIZE 1024
+#define BLOCK_SIZE 10 // Defined in number of packets
 
 // Forward declarations
 class SenderFlowManager;
@@ -34,8 +36,10 @@ private:
 	int tokens = 1; // The number of packets availble to be sent
 	int DOFCurrentBlock = 1; // Degrees of freedon of current block
 
+	SenderManager manager;
 	std::vector<std::chrono::high_resolution_clock::time_point> sentTimeStamps;
 	std::vector<int> seqNoToBlockMap;
+
 public:
 	// The four connections held by the sender module
 
@@ -47,13 +51,24 @@ public:
 		std::chrono::duration<double> min;
 		/* Smallest RTT seen so far */
 	}RttInfo;
-	RttInfo rttInfo;
+	RttInfo rttInfo = {
+		std::chrono::duration<double>(1),
+		std::chrono::duration<double>(0),
+		std::chrono::duration<double>(1)};
+
+
+
+
 	/* The shared sender for this endpoint */
 
-	SenderFlowManager(const char sourcePort[], const char destinationPort[]):
+	SenderFlowManager(
+		const char sourcePort[],
+		const char destinationPort[],
+		SenderManager theManager):
 		sender(PacketSender("127.0.0.1", destinationPort)),		
-		reciever(PacketReciever(atoi(sourcePort))){
-		// TODO initialise RTT to reasonable value
+		reciever(PacketReciever(atoi(sourcePort))),
+		manager(theManager){
+	
 		std::cout << "Flow manager set up to listen on port "
 			<< sourcePort << " and to send on port "
 			<< destinationPort << std::endl;
@@ -100,7 +115,8 @@ public:
 				// (2) Save timestamp and blocknumber 
 				sentTimeStamps.push_back( 
 					std::chrono::high_resolution_clock::now());
-				seqNoToBlockMap.push_back(0); //TODO update when blocknum known
+				seqNoToBlockMap.push_back(seqNumNext/BLOCK_SIZE); 
+				
 
 				// (3) Send packet, setting seqNum, blockNum etc.
 				// TODO set blcknum, save blcoknum, seqNum accociation
@@ -144,7 +160,6 @@ public:
 		std::cout << " Min : " << rttInfo.min.count() 
 			<< " s" << std::endl;
 	}
-
 };
 
 // Implementation of SenderManager
@@ -154,9 +169,17 @@ void SenderManager::addSubflow(SenderFlowManager &subflow){
 
 
 int main(){
-	SenderFlowManager flow1 = SenderFlowManager(FLOW1_SOURCE, FLOW1_DEST);
-	SenderFlowManager flow2 = SenderFlowManager(FLOW2_SOURCE, FLOW2_DEST);
+	SenderManager manager;
+
+	SenderFlowManager flow1 = 
+		SenderFlowManager(FLOW1_SOURCE, FLOW1_DEST, manager);
+	SenderFlowManager flow2 = 
+		SenderFlowManager(FLOW2_SOURCE, FLOW2_DEST, manager);
 	
+	manager.addSubflow(flow1);
+	manager.addSubflow(flow2);
+
+
 	std::thread flow1SendThread(
 		&SenderFlowManager::sendLoop, &flow1);
 	std::thread flow1RecieveThread(
