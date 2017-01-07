@@ -67,7 +67,7 @@ int main()
 		
 		window.recievedTo = calculteRecievedTo(); 
 		std::cout << "Recalculated where we're recieved to as: " << window.recievedTo << std::endl;
-		p.ackNum = window.recievedTo;
+		p.ackNum = window.recievedTo + 1; //Request NEXT byte
 		p.seqNum = packet.seqNum; // Tells sender which packet this was in response to, helping calculate RTT		
 		window.windowMutex.unlock();	
 		s.sendPacket(&p);

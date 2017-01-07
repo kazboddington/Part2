@@ -30,11 +30,11 @@ std::unordered_map<unsigned int, std::chrono::high_resolution_clock::time_point>
 
 
 typedef struct SenderWindow{
-	unsigned int startByte;						/* The beginning byte of the window */
-	unsigned int windowSize;						/* The size of the window */
-	unsigned int sentTo;							/* The NEXT byte to send (i.e. starts at byte 0) */
+	unsigned int startByte;				/* The beginning byte of the window */
+	unsigned int windowSize;			/* The size of the window */
+	unsigned int sentTo;				/* The NEXT byte to send (i.e. starts at byte 0) */
 	std::mutex windowMutex;				/* Mutex to protect window's access */
-	std::condition_variable windowCV;   /* Condition Variable to allow for waiting on window's changes */
+	//std::condition_variable windowCV; /* Condition Variable to allow for waiting on window's changes */
 } SenderWindow;
 SenderWindow window; // This is the window shared window obect
 
@@ -61,7 +61,7 @@ void resendPacket(Packet p, SenderThread &senderObject, TimerManager &timerManag
 	}
 }
 
-void sendBufferWindowed(std::vector<char> &dataToSend, SenderThread &senderObject, TimerManager &timerManager){
+void sendBufferWindowed(std::vector<char> dataToSend, SenderThread &senderObject, TimerManager &timerManager){
 
 	std::cout << "sending windowed data. DataSize = " << dataToSend.size()<< std::endl;
 	//window.windowCV.notify_all();
@@ -74,7 +74,7 @@ void sendBufferWindowed(std::vector<char> &dataToSend, SenderThread &senderObjec
 			std::cout << "Window: sendTo = " << window.sentTo <<	" windowSize = ";
 			std::cout << window.windowSize << " startByte = " << window.startByte << std::endl;
 			//Check if we've sent all the data
-			if(window.sentTo >= dataToSend.size()){ 
+			if((window.sentTo+1) >= dataToSend.size()){ //Note the +1 is since sentTO is zero-indexed, but datasize is not 
 				std::cout << "Sent all data!" << std::endl;
 				allDataSent = true;	
 				break; 
@@ -82,19 +82,24 @@ void sendBufferWindowed(std::vector<char> &dataToSend, SenderThread &senderObjec
 			// Set up packet to send
 			Packet p;
 			p.type = DATA;
-			p.dataSize = std::min(
-					std::min(window.startByte + window.windowSize - window.sentTo, (unsigned int)10),
-					(unsigned int)dataToSend.size());
+			p.dataSize = 
+					std::min(	(unsigned int)dataToSend.size(),
+					std::min(	(window.startByte + window.windowSize - window.sentTo),
+					std::min(	(unsigned int)dataToSend.size() - window.sentTo-1,
+								(unsigned int)10)));
 			p.seqNum = window.sentTo;
-
-			int endByte = window.sentTo + p.dataSize;
-			std::copy(dataToSend.begin() + window.sentTo, dataToSend.end() + endByte, p.data);
+			
+			int endByte = std::min(window.sentTo + p.dataSize, (unsigned int)(dataToSend.size()-1));
+			auto startsAt = dataToSend.begin() + window.sentTo;
+			auto endsAt = dataToSend.begin() + endByte;	
+			unsigned char* dataDestination = p.data;	
+			std::cout << "endByte = " << endByte << std::endl;
+			std::copy(startsAt, endsAt, dataDestination); 
 
 			//adjust sentTo pointer since we've sent a packet
 			window.sentTo += p.dataSize;	
-
-
 			//send the packet
+			
 			senderObject.sendPacket(p);
 				
 			// Add timestamp to packetSentTimes
@@ -122,7 +127,7 @@ std::vector<char> readFileIntoBuffer(std::string filename){
 int main()
 {
 	// initialise window values	
-	window.windowSize = 30;
+	window.windowSize = 2000;
 	window.startByte = 0;
 	window.sentTo = 0;
 	
@@ -135,7 +140,7 @@ int main()
 	TimerManager timerManager;	
 	std::function<void()> manageFunction = std::bind(&TimerManager::manageTasks, &timerManager);
 	std::thread timerThread(manageFunction);
-	std::vector<char> dataToSend = readFileIntoBuffer("./fileToSend.txt");		
+	std::vector<char> dataToSend = readFileIntoBuffer("./endpoint1.cpp");		
 	std::thread windowManagerThread(sendBufferWindowed, std::ref(dataToSend),
 		std::ref(senderThreadObj), std::ref(timerManager));
 	
@@ -160,7 +165,7 @@ int main()
 		}
 		
 		window.startByte = std::max(window.startByte, p.ackNum);	
-		window.windowCV.notify_all();
+		//window.windowCV.notify_all();
 		if(window.startByte >= dataToSend.size()){
 			std::cout << "ALL DATA HAS BEEN ACKNOWLEDGED!!! FINISHED!!!" << std::endl;
 			break;
