@@ -20,8 +20,10 @@ class SenderFlowManager;
 class SenderManager{
 private:
 	std::vector<SenderFlowManager*> subflows;
+	int numberOfBlocks = 100;
 public:
 	void addSubflow(SenderFlowManager& subflow);
+	int getNumberOfBlocks();
 };
 
 // Declaratin and implementatino of flowManager
@@ -55,11 +57,6 @@ public:
 		std::chrono::duration<double>(1),
 		std::chrono::duration<double>(0),
 		std::chrono::duration<double>(1)};
-
-
-
-
-	/* The shared sender for this endpoint */
 
 	SenderFlowManager(
 		const char sourcePort[],
@@ -132,6 +129,23 @@ public:
 		}
 	}
 
+	std::vector<int> calculateOnFlyPerBlock(){
+		// calculate how many packets are on the fly for each block, taking
+		// taking into account packets that have taken a long time to return;
+		
+		std::vector<int> onFlyPerBlock(manager.getNumberOfBlocks());
+
+		auto tooLongRtt = rttInfo.average*1.5;
+		auto now = std::chrono::high_resolution_clock::now();
+		for(int seqNum = lastSeqNumAckd; seqNum < (seqNumNext-1); seqNum++){
+			if(tooLongRtt < (now - sentTimeStamps[seqNum])){
+				onFlyPerBlock[seqNoToBlockMap[seqNum]]++;					
+			}
+		}		
+		return onFlyPerBlock;
+	}
+	
+
 	Packet* calculatePacketToSend(
 			int sent,
 			int currentBlock,
@@ -167,6 +181,9 @@ void SenderManager::addSubflow(SenderFlowManager &subflow){
 	subflows.push_back(&subflow);
 }
 
+int SenderManager::getNumberOfBlocks(){
+	return numberOfBlocks;
+}
 
 int main(){
 	SenderManager manager;
