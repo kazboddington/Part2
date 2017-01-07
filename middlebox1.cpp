@@ -39,9 +39,9 @@ int main(int argc, char *argv[]){
 		Packet p = reciever.listenOnce();
 		std::cout << "Recieved Packet!" << std::endl;
 		if(lossProbability != 0){
-			int rand = std::rand() % 100;
+			int rand = std::rand() % (int)(1/atof(lossProbability));
 			std::cout << rand << std::endl;
-			if (rand != 1){
+			if (rand != 0){
 				std::function<void()> resendPacket = std::bind(sendPacket, p, std::ref(sender));
 				timer.addTask(delay, resendPacket);
 				std::cout << "Packet sent afer delay" << std::endl;
