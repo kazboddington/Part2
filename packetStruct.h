@@ -5,9 +5,11 @@ enum Type {DATA, ACK};
 
 typedef struct Packet{
 	enum Type type;
+	unsigned int currentBlockDOF;
 	unsigned short dataSize;
 	unsigned int seqNum;
 	unsigned int ackNum;
+	unsigned int blockNo;
 	unsigned short windowSize;
 	unsigned char data[1024];	
 }Packet;

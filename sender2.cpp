@@ -11,7 +11,7 @@
 #define FLOW1_SOURCE "2000"
 #define FLOW2_SOURCE "3000"
 #define PACKET_SIZE 1024
-#define BLOCK_SIZE 10 // Defined in number of packets
+#define BLOCK_SIZE 1000 // Defined in number of packets
 
 // Forward declarations
 class SenderFlowManager;
@@ -37,7 +37,7 @@ private:
 	int seqNumNext = 0; // An index of the next packet to be sent
 	int lastSeqNumAckd = 0; // The last seqence number to be acknowledged
 	int currentBlock = 0; // The block in the priority position to be sent
-	int tokens = 100; // The number of packets availble to be sent
+	int tokens = 50; // The number of packets availble to be sent
 	int DOFCurrentBlock = 1; // Degrees of freedon of current block
 
 	double lossProbability = 0;
@@ -84,11 +84,19 @@ public:
 			Packet p = reciever.listenOnce();
 			std::cout << "Ack recieved, seqNum = " << p.seqNum << std::endl;	
 
+			// Adjust RTT
 			auto packetRtt = std::chrono::high_resolution_clock::now()
 			   - sentTimeStamps[p.seqNum]; 
 			adjustRtt(packetRtt);
+
+			// TODO check for timeouts	
 			
+			// Adjust  currentBlock, lastSeqNumAcked, currentDOF
+			currentBlock = std::max(currentBlock, (int)p.blockNo);
+			std::cout << "Current block: " << currentBlock << std::endl;
 			lastSeqNumAckd = std::max(lastSeqNumAckd, (int)p.seqNum);
+			DOFCurrentBlock = p.currentBlockDOF;
+
 			// TODO adjust currBlock and number of degrees of freedom
 
 			tokens++;
@@ -121,9 +129,8 @@ public:
 				// (2) Save timestamp and blocknumber 
 				sentTimeStamps.push_back( 
 					std::chrono::high_resolution_clock::now());
-				int blockNumber = seqNumNext/BLOCK_SIZE;
+				int blockNumber = p->blockNo;
 				seqNoToBlockMap.push_back(blockNumber); 
-				
 
 				// (3) Send packet, setting seqNum, blockNum etc.
 				// TODO set blcknum, save blcoknum, seqNum accociation
@@ -138,6 +145,27 @@ public:
 				delete p;
 			}
 		}
+	}
+
+	void checkForLosses(){
+		// Loops, looking at the packets that are currently in flight,
+		// checking  to see if there are losses
+		while(true){
+			// TODO some sleeping here
+			int seqNum = lastSeqNumAckd + 1;			
+			auto now = std::chrono::high_resolution_clock::now();
+			while(rttInfo.average*1.5 < (sentTimeStamps[seqNum]-now)){
+				adjustForLostPacket(seqNum, sentTimeStamps[seqNum]);		
+				lastSeqNumAckd++;
+				seqNum++;
+			}
+		}
+	}
+ 
+	void adjustForLostPacket(
+		int seqNum, std::chrono::high_resolution_clock::time_point sentTime){
+			
+		// TODO adjust the loss probability and the RTT
 	}
 
 	std::vector<int> calculateOnFlyPerBlock(){
@@ -161,7 +189,9 @@ public:
 	Packet* calculatePacketToSend(){
 		// Creates packet on heap of the correct data to send 
 		// TODO calculate which packet should be sent next and code it
+		// NOTE, should set block number to correct value
 		Packet *p = new Packet();
+		p->blockNo = currentBlock;
 		return p;
 	}
 
@@ -181,6 +211,10 @@ public:
 	
 	double getLossProbability(){
 		return lossProbability;
+	}
+	
+	int getCurrentBlock(){
+		return currentBlock;
 	}
 };
 
@@ -203,9 +237,13 @@ std::vector<int> SenderManager::getEstimatedPacketsPerBlock(){
 	std::vector<int> estimatedPackets(getNumberOfBlocks());
 	std::cout << "Estimating packets per block " << std::endl;
 	std::cout << "size of subflows = " << subflows.size() << std::endl;
+	// Loop through each flow and calculate the number of packets on the fly
+	// For each, and add them to the total, adjusting for the estimated loss 
+	// rate of each.
 	for(SenderFlowManager *flow : subflows){
 		std::vector<int> flowOnFly = (*flow).calculateOnFlyPerBlock();
-		for (int blockNo = 0; blockNo < getNumberOfBlocks(); blockNo++){
+		for (int blockNo = (*flow).getCurrentBlock();
+			   	blockNo < getNumberOfBlocks(); blockNo++){
 			estimatedPackets[blockNo] += 
 				(1 - (*flow).getLossProbability())*flowOnFly[blockNo];
 		}
