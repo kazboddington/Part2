@@ -5,10 +5,10 @@
 #include "PacketReciever.h"
 #include "PacketSender.h"
 
-#define FLOW1_SOURCE "4000"
-#define FLOW1_DEST "3000"
-#define FLOW2_SOURCE "7000"
-#define FLOW2_DEST "9000"
+#define FLOW1_SOURCE "8000"
+#define FLOW1_DEST "7000"
+#define FLOW2_SOURCE "9000"
+#define FLOW2_DEST "6000"
 
 class RecieverManager{
 public:

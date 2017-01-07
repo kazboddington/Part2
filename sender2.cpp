@@ -6,14 +6,25 @@
 #include "PacketSender.h"
 #include "PacketReciever.h"
 
-#define FLOW1_DEST "2000"
-#define FLOW2_DEST "8000"
-#define FLOW1_SOURCE "5000"
-#define FLOW2_SOURCE "6000"
+#define FLOW1_DEST "4000"
+#define FLOW2_DEST "5000"
+#define FLOW1_SOURCE "2000"
+#define FLOW2_SOURCE "3000"
 
-class SenderFlowManager{
+// Forward declarations
+class SenderFlowManager;
+
+// Declaration of senderManager
+class SenderManager{
+private:
+	std::vector<SenderFlowManager*> subflows;
 public:
-	// The four connections held by the sender module
+	void addSubflow(SenderFlowManager& subflow);
+};
+
+// Declaratin and implementatino of flowManager
+class SenderFlowManager{
+private:
 	PacketSender sender;
 	PacketReciever reciever;
 
@@ -24,6 +35,9 @@ public:
 	int DOFCurrentBlock = 1; // Degrees of freedon of current block
 
 	std::vector<std::chrono::high_resolution_clock::time_point> sentTimeStamps;
+	std::vector<int> seqNoToBlockMap;
+public:
+	// The four connections held by the sender module
 
 	typedef struct RttInfo{
 		std::chrono::duration<double> average;	
@@ -83,9 +97,10 @@ public:
 				Packet *p =
 					calculatePacketToSend(sent, currentBlock, DOFCurrentBlock);
 
-				// (2) Save timestamp
+				// (2) Save timestamp and blocknumber 
 				sentTimeStamps.push_back( 
 					std::chrono::high_resolution_clock::now());
+				seqNoToBlockMap.push_back(0); //TODO update when blocknum known
 
 				// (3) Send packet, setting seqNum, blockNum etc.
 				// TODO set blcknum, save blcoknum, seqNum accociation
@@ -131,6 +146,11 @@ public:
 	}
 
 };
+
+// Implementation of SenderManager
+void SenderManager::addSubflow(SenderFlowManager &subflow){
+	subflows.push_back(&subflow);
+}
 
 
 int main(){
