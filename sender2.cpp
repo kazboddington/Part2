@@ -22,8 +22,10 @@ private:
 	std::vector<SenderFlowManager*> subflows;
 	int numberOfBlocks = 100;
 public:
-	void addSubflow(SenderFlowManager& subflow);
+	void addSubflow(SenderFlowManager *subflow);
 	int getNumberOfBlocks();
+	std::vector<int> getEstimatedPacketsPerBlock();
+	std::vector<SenderFlowManager *> &getSubflows();
 };
 
 // Declaratin and implementatino of flowManager
@@ -35,13 +37,14 @@ private:
 	int seqNumNext = 0; // An index of the next packet to be sent
 	int lastSeqNumAckd = 0; // The last seqence number to be acknowledged
 	int currentBlock = 0; // The block in the priority position to be sent
-	int tokens = 1; // The number of packets availble to be sent
+	int tokens = 100; // The number of packets availble to be sent
 	int DOFCurrentBlock = 1; // Degrees of freedon of current block
 
-	SenderManager manager;
+	double lossProbability = 0;
+	SenderManager &manager;
 	std::vector<std::chrono::high_resolution_clock::time_point> sentTimeStamps;
 	std::vector<int> seqNoToBlockMap;
-
+	
 public:
 	// The four connections held by the sender module
 
@@ -61,7 +64,7 @@ public:
 	SenderFlowManager(
 		const char sourcePort[],
 		const char destinationPort[],
-		SenderManager theManager):
+		SenderManager& theManager):
 		sender(PacketSender("127.0.0.1", destinationPort)),		
 		reciever(PacketReciever(atoi(sourcePort))),
 		manager(theManager){
@@ -105,21 +108,29 @@ public:
 				// (1) Firstly need to calculate number of packets expected to 
 				// be recieved by the reciever, given loss rates etc.
 				
-				int sent = expectedRecieved();
-				Packet *p =
-					calculatePacketToSend(sent, currentBlock, DOFCurrentBlock);
+				std::vector<int> expectedToBeRecieved =
+				   	manager.getEstimatedPacketsPerBlock();
+				for(int block = 0; 
+						block < ((int)expectedToBeRecieved.size()-1); block++){
+					std::cout << "Block " << block << ": ";
+					std::cout << expectedToBeRecieved[block] << std::endl;
+				}
+
+				Packet *p = calculatePacketToSend();
 
 				// (2) Save timestamp and blocknumber 
 				sentTimeStamps.push_back( 
 					std::chrono::high_resolution_clock::now());
-				seqNoToBlockMap.push_back(seqNumNext/BLOCK_SIZE); 
+				int blockNumber = seqNumNext/BLOCK_SIZE;
+				seqNoToBlockMap.push_back(blockNumber); 
 				
 
 				// (3) Send packet, setting seqNum, blockNum etc.
 				// TODO set blcknum, save blcoknum, seqNum accociation
 				p->seqNum = seqNumNext;
 				sender.sendPacket(p);
-				std::cout << "Packet sent, seqNum= " << p->seqNum << std::endl;
+				std::cout << "Packet sent, seqNum = " << p->seqNum;
+				std::cout << " Block Number = " << blockNumber << std::endl;
 
 				// (4) Clean up
 				seqNumNext++;
@@ -133,12 +144,13 @@ public:
 		// calculate how many packets are on the fly for each block, taking
 		// taking into account packets that have taken a long time to return;
 		
+		std::cout << "Calculating OnFlyPerBlock " << std::endl;
 		std::vector<int> onFlyPerBlock(manager.getNumberOfBlocks());
 
 		auto tooLongRtt = rttInfo.average*1.5;
 		auto now = std::chrono::high_resolution_clock::now();
 		for(int seqNum = lastSeqNumAckd; seqNum < (seqNumNext-1); seqNum++){
-			if(tooLongRtt < (now - sentTimeStamps[seqNum])){
+			if(tooLongRtt > (now - sentTimeStamps[seqNum])){
 				onFlyPerBlock[seqNoToBlockMap[seqNum]]++;					
 			}
 		}		
@@ -146,21 +158,13 @@ public:
 	}
 	
 
-	Packet* calculatePacketToSend(
-			int sent,
-			int currentBlock,
-		   	int DOFCurrentBlock){
+	Packet* calculatePacketToSend(){
 		// Creates packet on heap of the correct data to send 
 		// TODO calculate which packet should be sent next and code it
 		Packet *p = new Packet();
 		return p;
 	}
 
-	int expectedRecieved(){
-		// TODO Calculate the number of packets that we expect will be recieved
-		// by the sender, given what we have currently sent
-		return 1;
-	}
 	void adjustRtt(std::chrono::duration<double, std::micro> measurement){
 		std::chrono::duration<double> error = measurement - rttInfo.average;
 		rttInfo.average = rttInfo.average + 0.125*error;
@@ -174,16 +178,41 @@ public:
 		std::cout << " Min : " << rttInfo.min.count() 
 			<< " s" << std::endl;
 	}
+	
+	double getLossProbability(){
+		return lossProbability;
+	}
 };
 
 // Implementation of SenderManager
-void SenderManager::addSubflow(SenderFlowManager &subflow){
-	subflows.push_back(&subflow);
+void SenderManager::addSubflow(SenderFlowManager *subflow){
+	subflows.push_back(subflow);
+	std::cout << "Added Flow to subflows, Size = "
+		<< subflows.size() << std::endl;
 }
 
 int SenderManager::getNumberOfBlocks(){
 	return numberOfBlocks;
 }
+
+std::vector<SenderFlowManager *> &SenderManager::getSubflows(){
+	return subflows;
+}
+
+std::vector<int> SenderManager::getEstimatedPacketsPerBlock(){
+	std::vector<int> estimatedPackets(getNumberOfBlocks());
+	std::cout << "Estimating packets per block " << std::endl;
+	std::cout << "size of subflows = " << subflows.size() << std::endl;
+	for(SenderFlowManager *flow : subflows){
+		std::vector<int> flowOnFly = (*flow).calculateOnFlyPerBlock();
+		for (int blockNo = 0; blockNo < getNumberOfBlocks(); blockNo++){
+			estimatedPackets[blockNo] += 
+				(1 - (*flow).getLossProbability())*flowOnFly[blockNo];
+		}
+	}
+	return estimatedPackets;
+}
+
 
 int main(){
 	SenderManager manager;
@@ -193,9 +222,10 @@ int main(){
 	SenderFlowManager flow2 = 
 		SenderFlowManager(FLOW2_SOURCE, FLOW2_DEST, manager);
 	
-	manager.addSubflow(flow1);
-	manager.addSubflow(flow2);
+	manager.addSubflow(&flow1);
+	manager.addSubflow(&flow2);
 
+	std::cout << "manager subflows size" << manager.getSubflows().size();
 
 	std::thread flow1SendThread(
 		&SenderFlowManager::sendLoop, &flow1);
@@ -204,4 +234,4 @@ int main(){
 
 	flow1SendThread.join();
 	flow1RecieveThread.join();
-}
+ }
