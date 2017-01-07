@@ -19,7 +19,7 @@
 #include "SenderThread.h"
 #include "TimerManager.h"
 
-#define SOURCE_PORT "9000"
+#define SOURCE_PORT "8000"
 #define DESTINATION_PORT "10000"
 
 /* ENDPOINT 1 - SEDNING PACKETS TO ENDPOINT */ 
@@ -176,8 +176,8 @@ int main()
 		}else{
 			std::chrono::duration<double> rtt = std::chrono::high_resolution_clock::now() - got->second;
 			std::cout << "Packet with seqNum " << got->first << " and RTT " ;
-		   	std::cout << std::chrono::duration_cast<std::chrono::microseconds>(rtt).count();
-		   	std::cout << " microseconds" << std::endl;
+		   	std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(rtt).count();
+		   	std::cout << " milliseconds recieved" << std::endl;
 			adjustRtt(rtt);		
 		}
 		

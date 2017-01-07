@@ -41,7 +41,7 @@ int PacketSender::resolvehelper(
 	result = getaddrinfo(hostname, service, &hints, &result_list);
 	if (result == 0)
 	{
-		//ASSERT(result_list->ai_addrlen <= sizeof(sockaddr_in));
+		if((result_list->ai_addrlen <= sizeof(sockaddr_in)) == false) std::cout << "something wrong witht the address" << std::endl;
 		memcpy(pAddr, result_list->ai_addr, result_list->ai_addrlen);
 		freeaddrinfo(result_list);
 	}

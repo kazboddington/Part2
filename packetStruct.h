@@ -3,7 +3,7 @@
 
 enum Type {DATA, ACK}; 	
 
-typedef struct Packets{
+typedef struct Packet{
 	enum Type type;
 	unsigned short dataSize;
 	unsigned int seqNum;
