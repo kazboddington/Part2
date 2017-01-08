@@ -3,7 +3,9 @@
 #include <vector>
 #include <thread> 
 #include <unistd.h>
+#include <algorithm>
 
+#include "netcode/decoder.hh"
 #include "PacketSender.h"
 #include "PacketReciever.h"
 
@@ -12,7 +14,6 @@
 #define FLOW1_SOURCE "2000"
 #define FLOW2_SOURCE "3000"
 #define PACKET_SIZE 1024
-#define BLOCK_SIZE 100 // Defined in number of packets
 
 // Forward declarations
 class SenderFlowManager;
@@ -22,11 +23,17 @@ class SenderManager{
 private:
 	std::vector<SenderFlowManager*> subflows;
 	int numberOfBlocks = 1000;
+	std::vector<uint8_t>& dataToSend; 
+	int sentUpTo = 0;
 public:
+	SenderManager(std::vector<uint8_t>& dataToSend);
 	void addSubflow(SenderFlowManager *subflow);
 	int getNumberOfBlocks();
 	std::vector<int> getEstimatedPacketsPerBlock();
 	std::vector<SenderFlowManager *> &getSubflows();
+	// Hands over a block of data for a flow to send to the reciever of the
+	// asked for size. 
+	std::vector<uint8_t> getDataToSend(int dataSize);
 };
 
 // Declaratin and implementatino of flowManager
@@ -127,17 +134,19 @@ public:
 					}
 				}
 
+				// Create packet to send, setting fields etc.
+				// TODO set blocknum, save blocknum, seqNum accociation
 				Packet *p = calculatePacketToSend();
+				p->seqNum = seqNumNext;
 
-				// (2) Save timestamp and blocknumber 
+				int blockNumber = p->blockNo;
+
+				// (2) Save timestamp 
 				sentTimeStamps.push_back( 
 					std::chrono::high_resolution_clock::now());
-				int blockNumber = p->blockNo;
 				seqNoToBlockMap.push_back(blockNumber); 
 
 				// (3) Send packet, setting seqNum, blockNum etc.
-				// TODO set blcknum, save blcoknum, seqNum accociation
-				p->seqNum = seqNumNext;
 				sender.sendPacket(p);
 				std::cout << "Packet sent, seqNum = " << p->seqNum;
 				std::cout << " Block Number = " << blockNumber << std::endl;
@@ -154,9 +163,9 @@ public:
 		// Loops, looking at the packets that are currently in flight,
 		// checking  to see if there are losses
 		
-			int seqNum = lastSeqNumAckd + 1;			
+		int seqNum = lastSeqNumAckd + 1;			
 		while(true){
-			usleep(1000000);
+			usleep(1000000); // 1 second?
 			if(seqNum >= seqNumNext)
 				continue;
 			auto now = std::chrono::high_resolution_clock::now();
@@ -209,6 +218,7 @@ public:
 		// Creates packet on heap of the correct data to send 
 		// TODO calculate which packet should be sent next and code it
 		// NOTE, should set block number to correct value
+			
 		Packet *p = new Packet();
 		p->blockNo = currentBlock;
 		return p;
@@ -238,6 +248,11 @@ public:
 };
 
 // Implementation of SenderManager
+
+SenderManager::SenderManager(std::vector<uint8_t>& theData): 
+	dataToSend(theData){
+}
+
 void SenderManager::addSubflow(SenderFlowManager *subflow){
 	subflows.push_back(subflow);
 	std::cout << "Added Flow to subflows, Size = "
@@ -270,9 +285,21 @@ std::vector<int> SenderManager::getEstimatedPacketsPerBlock(){
 	return estimatedPackets;
 }
 
+std::vector<uint8_t> SenderManager::getDataToSend(int blockSizeWanted){
+	int amountToSend = std::min(
+			(int)(dataToSend.size() - sentUpTo),
+			(int)blockSizeWanted);
+	return std::vector<uint8_t>(
+			dataToSend.begin() + sentUpTo,
+			dataToSend.begin() + sentUpTo + amountToSend);
+}
+
+
 
 int main(){
-	SenderManager manager;
+	std::vector<uint8_t> dataToSend(100000);
+	std::generate(dataToSend.begin(), dataToSend.end(), rand);
+	SenderManager manager(dataToSend);
 
 	SenderFlowManager flow1 = 
 		SenderFlowManager(FLOW1_SOURCE, FLOW1_DEST, manager);
