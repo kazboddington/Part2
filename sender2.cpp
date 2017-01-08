@@ -21,7 +21,7 @@ class SenderFlowManager;
 class SenderManager{
 private:
 	std::vector<SenderFlowManager*> subflows;
-	int numberOfBlocks = 100;
+	int numberOfBlocks = 1000;
 public:
 	void addSubflow(SenderFlowManager *subflow);
 	int getNumberOfBlocks();
@@ -121,8 +121,10 @@ public:
 				   	manager.getEstimatedPacketsPerBlock();
 				for(int block = 0; 
 						block < ((int)expectedToBeRecieved.size()-1); block++){
-					std::cout << "Block " << block << ": ";
-					std::cout << expectedToBeRecieved[block] << std::endl;
+					if (expectedToBeRecieved[block] >0){
+						std::cout << "Block " << block << ": ";
+						std::cout << expectedToBeRecieved[block] << std::endl;
+					}
 				}
 
 				Packet *p = calculatePacketToSend();
