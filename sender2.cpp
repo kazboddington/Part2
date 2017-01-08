@@ -4,6 +4,8 @@
 #include <thread> 
 #include <unistd.h>
 #include <algorithm>
+#include <list>
+#include <mutex>
 
 #include <kodocpp/kodocpp.hpp>
 #include "netcode/decoder.hh"
@@ -46,19 +48,33 @@ private:
 
 	int seqNumNext = 0; // An index of the next packet to be sent
 	int lastSeqNumAckd = 0; // The last seqence number to be acknowledged
-	int currentBlock = 0; // The block in the priority position to be sent
 	int tokens = 5; // The number of packets availble to be sent
-	int DOFCurrentBlock = 1; // Degrees of freedon of current block
+	int DOFCurrentBlock = 0; // Degrees of freedom of current block
 
+  	const double alpha = 0.1; // Used for updating loss probability
 	double lossProbability = 0;
-	int numberOfPacketsLost = 0;
+
+	
+
+	typedef struct blockInfo{
+		std::mutex blockInfoMutex; // Must Lock this before acccessing info
+		std::vector<uint8_t> data; // Data being sent, controlled by encoder
+		uint32_t offsetInFile; // Where in the original file this data is from
+		kodocpp::encoder encoder;
+		uint32_t ackedDOF;
+
+		// TODO not used yet, but will be used to replace current way of
+		// calculating the number of packets in flight per block
+		uint32_t numberOfPacketsinFlight; 
+	}blockInfo;
+
+	std::list<blockInfo> currentBlocksBeingSent; 
+	// Info for each block beingg sent by this flow
+	// Note that we delete blocks from this once they're sent
 	
 	std::vector<std::chrono::high_resolution_clock::time_point> sentTimeStamps;
-	std::vector<int> seqNoToBlockMap;
-
-	std::vector<uint8_t> currentBlockBeingSent;
-
-	kodocpp::encoder encoder;
+	std::vector<blockInfo*> mapSeqNumToBlockInfo;
+	
 public:
 	// The four connections held by the sender module
 
@@ -103,15 +119,13 @@ public:
 			   - sentTimeStamps[p.seqNum]; 
 			adjustRtt(packetRtt);
 
+			// Adjust loss probability
+			lossProbability -= lossProbability*(1-alpha)*(1-alpha) + alpha;
+
 			// TODO check for timeouts	
 			
-			// Adjust  currentBlock, lastSeqNumAcked, currentDOF
-			currentBlock = std::max(currentBlock, (int)p.blockNo);
-			std::cout << "Current block: " << currentBlock << std::endl;
+			// Adjust  lastSeqNumAcked, currentDOF
 			lastSeqNumAckd = std::max(lastSeqNumAckd, (int)p.seqNum);
-			DOFCurrentBlock = p.currentBlockDOF;
-
-			// TODO adjust currBlock and number of degrees of freedom
 
 			tokens++;
 		}
@@ -143,19 +157,14 @@ public:
 				// Create packet to send, setting fields etc.
 				// TODO set blocknum, save blocknum, seqNum accociation
 				Packet *p = calculatePacketToSend();
-				p->seqNum = seqNumNext;
-
-				int blockNumber = p->blockNo;
 
 				// (2) Save timestamp 
 				sentTimeStamps.push_back( 
 					std::chrono::high_resolution_clock::now());
-				seqNoToBlockMap.push_back(blockNumber); 
 
-				// (3) Send packet, setting seqNum, blockNum etc.
+				// (3) Send packet, setting seqNum, offset etc.
 				sender.sendPacket(p);
 				std::cout << "Packet sent, seqNum = " << p->seqNum;
-				std::cout << " Block Number = " << blockNumber << std::endl;
 
 				// (4) Clean up
 				seqNumNext++;
@@ -171,56 +180,39 @@ public:
 		
 		int seqNum = lastSeqNumAckd + 1;			
 		while(true){
-			usleep(1000000); // 1 second?
+			usleep(1000); // 1 second?
 			if(seqNum >= seqNumNext)
 				continue;
 			auto now = std::chrono::high_resolution_clock::now();
-			std::cout << "Checking for loss... " << std::endl;
-			std::cout << "seqNum = " << seqNum << " sentTimeStamps[seqNum] = " 
-				<< sentTimeStamps[seqNum].time_since_epoch().count() 
-				<< std::endl;
-			std::cout << "now = " << now.time_since_epoch().count()
-				<< std::endl;
-			std::chrono::duration<double> durationOfPacket = 
-				std::chrono::duration<double>(now-sentTimeStamps[seqNum]);
-			std::cout << "Packet Duration = " << durationOfPacket.count()
-				<< std::endl;
-			std::cout << "RTTaverage*1.5 = " << (rttInfo.average.count()*1.5);
+			//std::cout << "checking for loss... " << std::endl;
+			//std::cout << "seqNum = " << seqNum << " sentTimeStamps[seqNum] = " 
+			//	<< sentTimeStamps[seqNum].time_since_epoch().count() 
+			//	<< std::endl;
+			//std::cout << "now = " << now.time_since_epoch().count()
+			//	<< std::endl;
+			//std::chrono::duration<double> durationOfPacket = 
+			//	std::chrono::duration<double>(now-sentTimeStamps[seqNum]);
+			//std::cout << "Packet Duration = " << durationOfPacket.count()
+			//	<< std::endl;
+			//std::cout << "RTTaverage*1.5 = " << (rttInfo.average.count()*1.5);
 			while(seqNum <= seqNumNext &&
 				rttInfo.average*1.5 < (now-sentTimeStamps[seqNum])){
 				std::cout << "Loss Detected... " << std::endl;
-				adjustForLostPacket();		
+				adjustForLostPacket(mapSeqNumToBlockInfo[seqNum]);
 				lastSeqNumAckd++;
 				seqNum++;
 			}
 		}
 	}
  
-	void adjustForLostPacket(){
+	void adjustForLostPacket(blockInfo* blockLostFrom){
 		// Adjust the loss probability and the RTT, as well as increment tokens
-		double alpha = 0.1;
-		numberOfPacketsLost++;
+
+		blockLostFrom->numberOfPacketsinFlight -= 1;
 		lossProbability -= lossProbability*(1-alpha)*(1-alpha) + alpha;
 		tokens++;
 	}
 
-	std::vector<int> calculateOnFlyPerBlock(){
-		// calculate how many packets are on the fly for each block, taking
-		// taking into account packets that have taken a long time to return;
-		
-		std::cout << "Calculating OnFlyPerBlock " << std::endl;
-		std::vector<int> onFlyPerBlock(manager.getNumberOfBlocks());
-
-		auto tooLongRtt = rttInfo.average*1.5;
-		auto now = std::chrono::high_resolution_clock::now();
-		for(int seqNum = lastSeqNumAckd; seqNum < (seqNumNext-1); seqNum++){
-			if(tooLongRtt > (now - sentTimeStamps[seqNum])){
-				onFlyPerBlock[seqNoToBlockMap[seqNum]]++;					
-			}
-		}		
-		return onFlyPerBlock;
-	}
-	
 
 	Packet* calculatePacketToSend(){
 		// Creates packet on heap of the correct data to send 
@@ -230,10 +222,23 @@ public:
 		// NOTE: Assume that the encoder is set up correctly
 		
 		Packet *p = new Packet();
+		p->seqNum = seqNumNext;
 		
-		encoder.write_payload(p->data);
 
-		p->blockNo = currentBlock;
+		std::list<blockInfo>::iterator it;
+		for(currentBlocksBeingSent.begin(); 
+			it != currentBlocksBeingSent.end(); 
+			++it){
+			
+			int expectedArrivals = it->numberOfPacketsinFlight*lossProbability
+				+ it->ackedDOF;
+			if(expectedArrivals < (int)it->data.size()){
+				it->encoder.write_payload(p->data);
+				p->offsetInFile = it->offsetInFile;
+				mapSeqNumToBlockInfo.push_back(&(*it));
+			}
+		}	
+
 		return p;
 	}
 
@@ -255,9 +260,6 @@ public:
 		return lossProbability;
 	}
 	
-	int getCurrentBlock(){
-		return currentBlock;
-	}
 };
 
 // Implementation of SenderManager
@@ -278,24 +280,6 @@ int SenderManager::getNumberOfBlocks(){
 
 std::vector<SenderFlowManager *> &SenderManager::getSubflows(){
 	return subflows;
-}
-
-std::vector<int> SenderManager::getEstimatedPacketsPerBlock(){
-	std::vector<int> estimatedPackets(getNumberOfBlocks());
-	std::cout << "Estimating packets per block " << std::endl;
-	std::cout << "size of subflows = " << subflows.size() << std::endl;
-	// Loop through each flow and calculate the number of packets on the fly
-	// For each, and add them to the total, adjusting for the estimated loss 
-	// rate of each.
-	for(SenderFlowManager *flow : subflows){
-		std::vector<int> flowOnFly = (*flow).calculateOnFlyPerBlock();
-		for (int blockNo = (*flow).getCurrentBlock();
-			   	blockNo < getNumberOfBlocks(); blockNo++){
-			estimatedPackets[blockNo] += 
-				(1 - (*flow).getLossProbability())*flowOnFly[blockNo];
-		}
-	}
-	return estimatedPackets;
 }
 
 std::vector<uint8_t> SenderManager::getDataToSend(int blockSizeWanted){
