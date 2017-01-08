@@ -11,10 +11,12 @@
 #define FLOW2_DEST "6000"
 
 class RecieverManager{
-public:
+private: 
 	PacketReciever reciever;
 	PacketSender sender;
+	int nextBlockToDecode = 0;
 
+public:
 	RecieverManager(const char sourcePort[], const char destinationPort[]):
 		reciever(atoi(sourcePort)),
 		sender("127.0.0.1", destinationPort){
@@ -29,17 +31,31 @@ public:
 		while (true){
 			Packet p = reciever.listenOnce();
 			std::cout << "Recieved packet SeqNum = " << p.seqNum;
+			if(decodeBlock(&p) == 0){
+				if((int)p.blockNo == nextBlockToDecode){
+					nextBlockToDecode++;
+				}
+			}
+
 			// TODO processPacket
 			
 			Packet* ack = new Packet();
 
 			ack->seqNum = p.seqNum;
+			ack->blockNo = nextBlockToDecode;
+
 			// TODO set DOF and current block
 			
 			sender.sendPacket(ack);
-			std::cout << " ... Ack sent" << std::endl;
+			std::cout << " ... Ack sent ";
+			std::cout << "blockNo = " << ack->blockNo << std::endl;
 			delete ack;
 		}
+	}
+	int decodeBlock(Packet *p){
+		// Attempt to decode the block to which packet p belongs. return the 
+		// degrees of freedom (0 if block decoded) 
+		return (nextBlockToDecode*1000 -p->seqNum);
 	}
 };
 

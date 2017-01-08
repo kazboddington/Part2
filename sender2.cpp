@@ -2,6 +2,7 @@
 #include <chrono>
 #include <vector>
 #include <thread> 
+#include <unistd.h>
 
 #include "PacketSender.h"
 #include "PacketReciever.h"
@@ -11,7 +12,7 @@
 #define FLOW1_SOURCE "2000"
 #define FLOW2_SOURCE "3000"
 #define PACKET_SIZE 1024
-#define BLOCK_SIZE 1000 // Defined in number of packets
+#define BLOCK_SIZE 100 // Defined in number of packets
 
 // Forward declarations
 class SenderFlowManager;
@@ -37,7 +38,7 @@ private:
 	int seqNumNext = 0; // An index of the next packet to be sent
 	int lastSeqNumAckd = 0; // The last seqence number to be acknowledged
 	int currentBlock = 0; // The block in the priority position to be sent
-	int tokens = 50; // The number of packets availble to be sent
+	int tokens = 5; // The number of packets availble to be sent
 	int DOFCurrentBlock = 1; // Degrees of freedon of current block
 
 	double lossProbability = 0;
@@ -150,11 +151,27 @@ public:
 	void checkForLosses(){
 		// Loops, looking at the packets that are currently in flight,
 		// checking  to see if there are losses
-		while(true){
-			// TODO some sleeping here
+		
 			int seqNum = lastSeqNumAckd + 1;			
+		while(true){
+			usleep(1000000);
+			if(seqNum >= seqNumNext)
+				continue;
 			auto now = std::chrono::high_resolution_clock::now();
-			while(rttInfo.average*1.5 < (sentTimeStamps[seqNum]-now)){
+			std::cout << "Checking for loss... " << std::endl;
+			std::cout << "seqNum = " << seqNum << " sentTimeStamps[seqNum] = " 
+				<< sentTimeStamps[seqNum].time_since_epoch().count() 
+				<< std::endl;
+			std::cout << "now = " << now.time_since_epoch().count()
+				<< std::endl;
+			std::chrono::duration<double> durationOfPacket = 
+				std::chrono::duration<double>(now-sentTimeStamps[seqNum]);
+			std::cout << "Packet Duration = " << durationOfPacket.count()
+				<< std::endl;
+			std::cout << "RTTaverage*1.5 = " << (rttInfo.average.count()*1.5);
+			while(seqNum <= seqNumNext &&
+				rttInfo.average*1.5 < (now-sentTimeStamps[seqNum])){
+				std::cout << "Loss Detected... " << std::endl;
 				adjustForLostPacket(seqNum, sentTimeStamps[seqNum]);		
 				lastSeqNumAckd++;
 				seqNum++;
@@ -164,8 +181,8 @@ public:
  
 	void adjustForLostPacket(
 		int seqNum, std::chrono::high_resolution_clock::time_point sentTime){
-			
-		// TODO adjust the loss probability and the RTT
+		// Adjust the loss probability and the RTT, as well as increment tokens
+		tokens++;
 	}
 
 	std::vector<int> calculateOnFlyPerBlock(){
@@ -269,6 +286,8 @@ int main(){
 		&SenderFlowManager::sendLoop, &flow1);
 	std::thread flow1RecieveThread(
 		&SenderFlowManager::recieveAndProcessAcks, &flow1);
+	std::thread flow1LossDetectThread(
+			&SenderFlowManager::checkForLosses, &flow1);
 
 	flow1SendThread.join();
 	flow1RecieveThread.join();
