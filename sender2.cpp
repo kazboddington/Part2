@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <algorithm>
 
+#include <kodocpp/kodocpp.hpp>
 #include "netcode/decoder.hh"
 #include "PacketSender.h"
 #include "PacketReciever.h"
@@ -41,6 +42,7 @@ class SenderFlowManager{
 private:
 	PacketSender sender;
 	PacketReciever reciever;
+	SenderManager &manager;
 
 	int seqNumNext = 0; // An index of the next packet to be sent
 	int lastSeqNumAckd = 0; // The last seqence number to be acknowledged
@@ -49,10 +51,14 @@ private:
 	int DOFCurrentBlock = 1; // Degrees of freedon of current block
 
 	double lossProbability = 0;
-	SenderManager &manager;
+	int numberOfPacketsLost = 0;
+	
 	std::vector<std::chrono::high_resolution_clock::time_point> sentTimeStamps;
 	std::vector<int> seqNoToBlockMap;
-	
+
+	std::vector<uint8_t> currentBlockBeingSent;
+
+	kodocpp::encoder encoder;
 public:
 	// The four connections held by the sender module
 
@@ -183,16 +189,18 @@ public:
 			while(seqNum <= seqNumNext &&
 				rttInfo.average*1.5 < (now-sentTimeStamps[seqNum])){
 				std::cout << "Loss Detected... " << std::endl;
-				adjustForLostPacket(seqNum, sentTimeStamps[seqNum]);		
+				adjustForLostPacket();		
 				lastSeqNumAckd++;
 				seqNum++;
 			}
 		}
 	}
  
-	void adjustForLostPacket(
-		int seqNum, std::chrono::high_resolution_clock::time_point sentTime){
+	void adjustForLostPacket(){
 		// Adjust the loss probability and the RTT, as well as increment tokens
+		double alpha = 0.1;
+		numberOfPacketsLost++;
+		lossProbability -= lossProbability*(1-alpha)*(1-alpha) + alpha;
 		tokens++;
 	}
 
@@ -219,7 +227,12 @@ public:
 		// TODO calculate which packet should be sent next and code it
 		// NOTE, should set block number to correct value
 			
+		// NOTE: Assume that the encoder is set up correctly
+		
 		Packet *p = new Packet();
+		
+		encoder.write_payload(p->data);
+
 		p->blockNo = currentBlock;
 		return p;
 	}

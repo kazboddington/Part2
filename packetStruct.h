@@ -9,9 +9,9 @@ typedef struct Packet{
 	unsigned short dataSize;
 	unsigned int seqNum;
 	unsigned int ackNum;
-	unsigned int blockNo;
+	unsigned int offsetInFile;
 	unsigned short windowSize;
-	unsigned char data[1024];	
+	unsigned char data[1100];	
 }Packet;
 
 /* type 1 is a standard data packet                      */

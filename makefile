@@ -13,7 +13,7 @@ all:
 #################NEEDED FOR MAIN PROGRAM, TEMPORARILY DISABLED FOR TESTING
 
 	g++ -std=c++11 -pthread -o sender2 sender2.cpp PacketSender.cpp \
-	   	PacketReciever.cpp\
+	   	PacketReciever.cpp \
 		-I/home/zak/dev/kodo-cpp/shared_test/include  \
 		-I/home/zak/dev/kodo-cpp/shared_test/include/kodocpp \
 		-L/home/zak/dev/kodo-cpp/shared_test \
