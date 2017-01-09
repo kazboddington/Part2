@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <list>
 #include <mutex>
+#include <map>
 
 #include <kodocpp/kodocpp.hpp>
 #include "netcode/decoder.hh"
@@ -45,12 +46,14 @@ private:
 	PacketReciever reciever;
 	SenderManager &manager;
 
+	std::mutex seqNumMux; // Take this to access seqBumNext, lastSeqNumNext,
 	int seqNumNext = 0; // An index of the next packet to be sent
 	int lastSeqNumAckd = 0; // The last seqence number to be acknowledged
-	int tokens = 5; // The number of packets availble to be sent
+
+	int tokens = 10; // The number of packets availble to be sent
 	int DOFCurrentBlock = 0; // Degrees of freedom of current block
 
-  	const double alpha = 0.1; // Used for updating loss probability
+  	const double alpha = 0.01; // Used for updating loss probability
 	double lossProbability = 0;
 
 	typedef struct blockInfo{
@@ -71,7 +74,7 @@ private:
 	
 	std::vector<std::chrono::high_resolution_clock::time_point> sentTimeStamps;
 	std::vector<blockInfo*> mapSeqNumToBlockInfo;
-	
+	std::map<unsigned int, bool> isTimedOut;
 public:
 	// The four connections held by the sender module
 
@@ -116,36 +119,41 @@ public:
 			   - sentTimeStamps[p.seqNum]; 
 			adjustRtt(packetRtt);
 
-			// Adjust loss probability
-			lossProbability = lossProbability*(1-alpha);
+			// Check if packet is marked as lost.
+			if((isTimedOut.find(p.seqNum) == isTimedOut.end())
+				   	&& !(isTimedOut[p.seqNum])){
 
-			// TODO check for timeouts	
-			
-			blockInfo* theBlock = mapSeqNumToBlockInfo[p.seqNum];
+				// Adjust loss probability
+				lossProbability = lossProbability*(1-alpha);
+				
+				blockInfo* theBlock = mapSeqNumToBlockInfo[p.seqNum];
 
-			theBlock->blockInfoMutex.lock();
+				theBlock->blockInfoMutex.lock();
 
-			std::cout << "Block offset recieved from = " 
-				<< theBlock->offsetInFile << std::endl
-				<< "decrementing packets in flight from: " 
-				<< theBlock->numberOfPacketsInFlight
-				<< std::endl;
+				std::cout << "Block offset recieved from = " 
+					<< theBlock->offsetInFile << std::endl
+					<< "decrementing packets in flight from: " 
+					<< theBlock->numberOfPacketsInFlight
+					<< std::endl;
 
-			--(theBlock->numberOfPacketsInFlight);
-			theBlock->ackedDOF 
-				= std::min(p.currentBlockDOF, theBlock->ackedDOF);
-			std::cout << "p.currentBlockDOF " << p.currentBlockDOF 
-				<< " theBlock->ackedDOF = " << theBlock->ackedDOF
-				<< std::endl;
-			std::cout << "currentBlockDOF set to: " << theBlock->ackedDOF
-				<< std::endl;
+				--(theBlock->numberOfPacketsInFlight);
+				theBlock->ackedDOF 
+					= std::min(p.currentBlockDOF, theBlock->ackedDOF);
+				std::cout << "p.currentBlockDOF " << p.currentBlockDOF 
+					<< " theBlock->ackedDOF = " << theBlock->ackedDOF
+					<< std::endl;
+				std::cout << "currentBlockDOF set to: " << theBlock->ackedDOF
+					<< std::endl;
 
-			theBlock->blockInfoMutex.unlock();	
+				theBlock->blockInfoMutex.unlock();	
 
-			// Adjust  lastSeqNumAcked, currentDOF
-			lastSeqNumAckd = std::max(lastSeqNumAckd, (int)p.seqNum);
+				// Adjust  lastSeqNumAcked, currentDOF
+				seqNumMux.lock();
+				lastSeqNumAckd = std::max(lastSeqNumAckd, (int)p.seqNum);
+				seqNumMux.unlock();
 
-			tokens++;
+				tokens++;
+			}
 		}
 	}
 
@@ -183,43 +191,58 @@ public:
 		
 		while(true){
 			usleep(1000); // loop every 1 millisecond 
+
+			seqNumMux.lock();
 			int seqNum = lastSeqNumAckd + 1;			
 
 			// No need to loop if we've already recieved the all acks 
-			if(seqNum >= seqNumNext) continue;
+			if(seqNum >= seqNumNext){
+				seqNumMux.unlock();
+				continue;
+			}
+
 
 			auto now = std::chrono::high_resolution_clock::now();
 
 			// Loop thorough packets in flight, oldest to newest. Look for 
 			// high-delay packets and count them as lost	
 			// Note this doesn't use std deviation, which would be a better idea
-			while(seqNum < seqNumNext &&
-				rttInfo.average*10 < (now-sentTimeStamps[seqNum])){
 				
-				std::cout << "Loss Detected - seqNum = " << seqNum << std::endl;
+			while(seqNum < seqNumNext &&
+				rttInfo.average*1.5 < (now-sentTimeStamps[seqNum])){
+				
+				seqNumMux.unlock();
+				std::cout << "Loss Detected - seqNum = " << seqNum 
+					<< " SeqNumNext = " << seqNumNext << std::endl;
 
-				adjustForLostPacket(mapSeqNumToBlockInfo[seqNum]);
+				adjustForLostPacket(mapSeqNumToBlockInfo[seqNum], seqNum);
 				
 				// Update the lastSeqNumAcked as if packet is acked
+				seqNumMux.lock();
 				lastSeqNumAckd++;
 
 				seqNum++;
 			}
+			seqNumMux.unlock();
 		}
 	}
  
-	void adjustForLostPacket(blockInfo* blockLostFrom){
+	void adjustForLostPacket(blockInfo* blockLostFrom, int seqNum){
 		// Adjust the loss probability and the RTT, as well as increment tokens
 		
 
-		std::cout << "adjusting for lost packet in block: " 
-			<< blockLostFrom->offsetInFile << " Packets in flight " 
-			<< blockLostFrom->numberOfPacketsInFlight << std::endl;
+		std::cout << "adjusting for lost packet in block: ";
+		std::cout << blockLostFrom->offsetInFile << " Packets in flight ";
+		std::cout << blockLostFrom->numberOfPacketsInFlight << std::endl;
 		std::cout << " dataSize " << blockLostFrom->data.size() << std::endl;
 
+		isTimedOut[seqNum] = false;
+
 		blockLostFrom->blockInfoMutex.lock();
-		std::cout << "lock aquired" << std::endl;
-		//blockLostFrom->numberOfPacketsInFlight -= 1;
+		// TODO only make sure we don't double decrement if packet does arrive 
+		// (but is late)
+		blockLostFrom->numberOfPacketsInFlight -= 1;
+		tokens++;
 		blockLostFrom->blockInfoMutex.unlock();
 		lossProbability = lossProbability*(1-alpha)*(1-alpha) + alpha;
 		std::cout << "Loss lossProbability = " << lossProbability << std::endl;
@@ -257,7 +280,7 @@ public:
 
 
 			int expectedArrivals =
-			   	loopedBlock->numberOfPacketsInFlight * lossProbability 
+			   	loopedBlock->numberOfPacketsInFlight * (1-lossProbability)
 				+ loopedBlock->data.size() / PACKET_SIZE 
 				- loopedBlock->ackedDOF;
 			std::cout << "expectedArrivals = " << expectedArrivals << std::endl;
@@ -289,10 +312,17 @@ public:
 	}
 	Packet* generatePacketFromBlock(blockInfo* block){
 		Packet *p = new Packet();
+		
+		// Add the packet's seqnece number to the map of seqence numbers
+		mapSeqNumToBlockInfo.push_back(block);
+		std::cout << "put block: " << block->offsetInFile << " Into position" 
+			<< mapSeqNumToBlockInfo.size() << std::endl;
 	
 		// TODO decide a clearer place for this to go...		
+		seqNumMux.lock();
 		p->seqNum = seqNumNext;
 		seqNumNext++;
+		seqNumMux.unlock();
 
 		block->blockInfoMutex.lock(); // Take lock
 		
@@ -312,12 +342,6 @@ public:
 
 		// set the packt's offset field
 		p->offsetInFile = block->offsetInFile;
-
-		// Add the packet's seqnece number to the map of seqence numbers
-		mapSeqNumToBlockInfo.push_back(block);
-		std::cout << "put block: " << block->offsetInFile << " Into position" 
-			<< mapSeqNumToBlockInfo.size() << std::endl;
-
 
 		block->blockInfoMutex.unlock(); // release lock
 		
@@ -438,10 +462,8 @@ int main(){
 
 	SenderManager manager(dataToSend);
 
-	SenderFlowManager flow1 = 
-		SenderFlowManager(FLOW1_SOURCE, FLOW1_DEST, manager);
-	SenderFlowManager flow2 = 
-		SenderFlowManager(FLOW2_SOURCE, FLOW2_DEST, manager);
+	SenderFlowManager flow1(FLOW1_SOURCE, FLOW1_DEST, manager);
+	SenderFlowManager flow2(FLOW2_SOURCE, FLOW2_DEST, manager);
 	
 	manager.addSubflow(&flow1);
 	manager.addSubflow(&flow2);

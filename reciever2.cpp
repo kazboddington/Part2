@@ -31,11 +31,11 @@ private:
 	typedef struct recvBlockInfo{
 		uint32_t offset;			
 		kodocpp::decoder decoder;
-		std::vector<uint8_t> data_in;
+		std::vector<uint8_t> data_out;
 		uint32_t DOF;
 	}recvBlockInfo;
 
-	std::map<uint32_t, recvBlockInfo> recievedBlocksByOffset;
+	std::map<uint32_t, recvBlockInfo*> recievedBlocksByOffset;
 
 public:
 
@@ -43,6 +43,33 @@ public:
 		reciever(atoi(sourcePort)),
 		sender("127.0.0.1", destinationPort){
 	}
+
+
+	recvBlockInfo* createInfoBlock(uint32_t blockSize, uint32_t offset){
+
+		kodocpp::decoder_factory decoder_factory(
+			kodocpp::codec::full_vector,
+			kodocpp::field::binary8,
+			blockSize,
+			PACKET_SIZE);
+		
+		recvBlockInfo* blockInfo = new recvBlockInfo{
+				offset,
+				decoder_factory.build(),
+				std::vector<uint8_t>(),
+				blockSize};
+		
+		blockInfo->data_out.resize(blockInfo->decoder.block_size());
+
+
+		blockInfo->decoder.set_mutable_symbols(
+			blockInfo->data_out.data(), blockInfo->decoder.block_size());
+
+
+		return blockInfo;
+	}
+
+	
 
 	void recievePackets(){
 		// Handles the recieving and acknowledgement of packsts on this flow
@@ -53,68 +80,36 @@ public:
 		
 		uint32_t blockSize = 250;
 
-		kodocpp::decoder_factory decoder_factory(
-			kodocpp::codec::full_vector,
-			kodocpp::field::binary8,
-			blockSize,
-			PACKET_SIZE);
-
-		kodocpp::decoder decoder = decoder_factory.build();
-
-		std::vector<uint8_t> dataIn(decoder.block_size());
-
-		decoder.set_mutable_symbols(
-			dataIn.data(), decoder.block_size());
-
 		while (true){
 			Packet p = reciever.listenOnce();
-			std::cout << "\e[A\e[ARecieved packet SeqNum = " << p.seqNum
+			std::cout << "Recieved packet SeqNum = " << p.seqNum
 				<< " Data size = " << p.dataSize << std::endl;
 
-				
+			// Block does not yet exist		
 			if(recievedBlocksByOffset.find(p.offsetInFile) 
 					== recievedBlocksByOffset.end()){
 				// Block does not yet exist so create new block
 				std::cout << "Making new block" << std::endl;
 
-				kodocpp::decoder_factory decoder_factory(
-					kodocpp::codec::full_vector,
-					kodocpp::field::binary8,
-					blockSize,
-					PACKET_SIZE);
-
-				kodocpp::decoder decoder = decoder_factory.build();
-				recvBlockInfo newBlock = {
-					p.offsetInFile,
-					decoder,
-					std::vector<uint8_t>(decoder.block_size()),
-					blockSize};
-
-				std::cout << "Binding buffer to decoder" << std::endl;
-				newBlock.decoder.set_mutable_symbols(
-						newBlock.data_in.data(), newBlock.decoder.block_size());
+				recvBlockInfo* newBlock
+				   	= createInfoBlock(blockSize, p.offsetInFile);
 				
 				std::cout << "Adding block to map" << std::endl;
 				recievedBlocksByOffset.insert({p.offsetInFile, newBlock});
 			}
 		
 
-			recvBlockInfo* theBlock	= &recievedBlocksByOffset[p.offsetInFile]; 
+			recvBlockInfo* theBlock	= recievedBlocksByOffset[p.offsetInFile]; 
 
 			// Hand over data for the decoder
 			std::vector<uint8_t> wrappedData(p.data, p.data + p.dataSize);
-			decoder.read_payload(wrappedData.data());
+			theBlock->decoder.read_payload(wrappedData.data());
 
 			// Decrement DOF for this block
 			--(theBlock->DOF);
 			theBlock->DOF = std::max((int)theBlock->DOF, 0);
 			std::cout << "DOF = " << theBlock->DOF << std::endl;
 	
-			if(decoder.is_complete()){
-				std::cout << "DECODED ALL DATA" << std::endl;
-				printData(dataIn.data(), 50);
-				while(true);
-			}
 			
 			// create new packet and set fields 
 			Packet* ack = new Packet();
@@ -124,8 +119,13 @@ public:
 
 			// TODO set DOF and current block
 				
-			
 			sender.sendPacket(ack);
+
+			if(theBlock->decoder.is_complete()){
+				std::cout << "DECODED ALL DATA" << std::endl;
+				printData(theBlock->data_out.data(), 50);
+			}
+
 			delete ack;
 		}
 	}
