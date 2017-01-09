@@ -35,7 +35,7 @@ public:
 	std::vector<SenderFlowManager *> &getSubflows();
 	// Hands over a block of data for a flow to send to the reciever of the
 	// asked for size. 
-	std::vector<uint8_t> getDataToSend(int maxNumberOfPackets);
+	int setDataInBlock(int maxNumberOfPackets, std::vector<uint8_t>* dataToSet);
 };
 
 // Declaratin and implementatino of flowManager
@@ -181,9 +181,9 @@ public:
 		// Loops, looking at the packets that are currently in flight,
 		// checking to see if there are losses
 		
-		int seqNum = lastSeqNumAckd + 1;			
 		while(true){
 			usleep(1000); // loop every 1 millisecond 
+			int seqNum = lastSeqNumAckd + 1;			
 
 			// No need to loop if we've already recieved the all acks 
 			if(seqNum >= seqNumNext) continue;
@@ -194,9 +194,9 @@ public:
 			// high-delay packets and count them as lost	
 			// Note this doesn't use std deviation, which would be a better idea
 			while(seqNum <= seqNumNext &&
-				rttInfo.average*1.5 < (now-sentTimeStamps[seqNum])){
+				rttInfo.average*10 < (now-sentTimeStamps[seqNum])){
 				
-				std::cout << "Loss Detected... " << std::endl;
+				std::cout << "Loss Detected - seqNum = " << seqNum << std::endl;
 
 				adjustForLostPacket(mapSeqNumToBlockInfo[seqNum]);
 				
@@ -212,10 +212,9 @@ public:
 		// Adjust the loss probability and the RTT, as well as increment tokens
 		std::cout << "adjusting for lost packet " << std::endl;
 		blockLostFrom->blockInfoMutex.lock();
-		blockLostFrom->numberOfPacketsInFlight -= 1;
+		//blockLostFrom->numberOfPacketsInFlight -= 1;
 		blockLostFrom->blockInfoMutex.unlock();
 		lossProbability = lossProbability*(1-alpha)*(1-alpha) + alpha;
-		tokens++;
 	}
 
 	Packet* calculatePacketToSend(){
@@ -254,9 +253,12 @@ public:
 				- loopedBlock->ackedDOF;
 			std::cout << "expectedArrivals = " << expectedArrivals << std::endl;
 
-			if(expectedArrivals < (int)loopedBlock->data.size()){
+			if(expectedArrivals < ((int)loopedBlock->data.size()/PACKET_SIZE)){
+
 				std::cout << "Generating packet from block at offset "
-					<< loopedBlock->offsetInFile << std::endl;
+					<< loopedBlock->offsetInFile << " block Datasize = "
+				   	<< loopedBlock->data.size() << std::endl; 
+
 				loopedBlock->blockInfoMutex.unlock();
 				Packet* p = generatePacketFromBlock(*it);
 				return p;
@@ -266,10 +268,12 @@ public:
 
 		// None of the blocks in the list need packets sending. Create a new 
 		// block and generate a packet using it.
-		std::cout << "Creating new block" << std::endl;
 		currentBlocksBeingSent.push_back(calculateNewBlock());
-
 		blockInfo* theBlock = currentBlocksBeingSent.back();
+
+		std::cout << "Created new block, offset = " 
+			<< theBlock->offsetInFile << std::endl;
+
 		Packet* p = generatePacketFromBlock(theBlock);
 
 		return p;
@@ -288,7 +292,10 @@ public:
 	
 		uint32_t bytesUsed = block->encoder.write_payload(p->data);
 		std::cout << "Payload Size = " << bytesUsed << std::endl;
-		
+
+		p->dataSize = bytesUsed;
+		std::cout << "dataSize = " << p->dataSize << std::endl;
+
 		// Update number of packets in flight since we're sendin a packet
 		std::cout << "Incrementing number of packets in flight...";
 		(block->numberOfPacketsInFlight)++;
@@ -300,9 +307,11 @@ public:
 		// Add the packet's seqnece number to the map of seqence numbers
 		mapSeqNumToBlockInfo.push_back(block);
 
+		std::cout << "Data looks like: " << p->data << std::endl;
 		block->blockInfoMutex.unlock(); // release lock
 		return p;		
 	}
+// TODO NOTE THAT THE TIMEOUT FOR LOSSES SEEMS TO CAUSE SEG FAULTS
 
 	void adjustRtt(std::chrono::duration<double, std::micro> measurement){
 		std::chrono::duration<double> error = measurement - rttInfo.average;
@@ -321,12 +330,13 @@ public:
 	blockInfo* calculateNewBlock(){
 		blockInfo* theBlock = new blockInfo();
 
-		// Temporart fixed length blocks of 1000 packets
+		// Temporarily fixed length blocks
 		uint32_t maxNumberOfPacketsInBlock = 250;
 
 		// Grab data from manager
-		theBlock->data = 
-			manager.getDataToSend(maxNumberOfPacketsInBlock);
+		uint32_t offset = manager.setDataInBlock(
+				maxNumberOfPacketsInBlock, 
+				&(theBlock->data));
 
 		uint32_t numberOfPacketsInBlock = theBlock->data.size() / PACKET_SIZE;
 		std::cout << "Got data to send, size = " 
@@ -352,6 +362,8 @@ public:
 		theBlock->encoder.set_const_symbols(
 				theBlock->data.data(),
 				theBlock->data.size());
+
+		theBlock->offsetInFile = offset;
 
 		std::cout << "Setting number of DOF in the block" << std::endl;
 		theBlock->ackedDOF = numberOfPacketsInBlock;
@@ -381,15 +393,29 @@ std::vector<SenderFlowManager *> &SenderManager::getSubflows(){
 	return subflows;
 }
 
-std::vector<uint8_t> SenderManager::getDataToSend(int maxNumberOfPackets){
+int SenderManager::setDataInBlock(
+		int maxNumberOfPackets,
+	   	std::vector<uint8_t>* dataToSet){
+
 	int amountToSend = std::min(
 			(int)(dataToSend.size() - sentUpTo),
 			(int)maxNumberOfPackets*PACKET_SIZE);
+	if(amountToSend <= 0) {
+		std::cout << "ALL DATA SENT... amountToSend = " 
+			<< amountToSend << std::endl;
+		while(true);
+	}
 	std::cout << "Handing over " << amountToSend 
+
 		<< " bytes to flow" << std::endl;
-	return std::vector<uint8_t>(
+
+	*dataToSet = std::vector<uint8_t>(
 			dataToSend.begin() + sentUpTo,
 			dataToSend.begin() + sentUpTo + amountToSend);
+	
+	sentUpTo += amountToSend;
+
+	return sentUpTo - amountToSend;
 }
 
 

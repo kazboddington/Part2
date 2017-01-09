@@ -47,7 +47,8 @@ public:
 		uint32_t blockSize = 250;
 		while (true){
 			Packet p = reciever.listenOnce();
-			std::cout << "Recieved packet SeqNum = " << p.seqNum << std::endl;
+			std::cout << "Recieved packet SeqNum = " << p.seqNum 
+				<< " Data size = " << p.dataSize << std::endl;
 
 			
 			if(recievedBlocksByOffset.find(p.offsetInFile) 
@@ -69,17 +70,19 @@ public:
 					blockSize};
 
 				std::cout << "Binding buffer to decoder" << std::endl;
-				//newBlock.decoder.set_mutable_symbols(
-				//		newBlock.data_in.data(), newBlock.decoder.block_size());
-
+				newBlock.decoder.set_mutable_symbols(
+						newBlock.data_in.data(), newBlock.decoder.block_size());
+				
 				std::cout << "Adding block to map" << std::endl;
 				recievedBlocksByOffset.insert({p.offsetInFile, newBlock});
 			}
 
 			recvBlockInfo* theBlock	= &recievedBlocksByOffset[p.offsetInFile]; 
 
+			std::cout << "Data looks like: " << p.data << std::endl;
 			// Hand over data for the decoder
-			//theBlock->decoder.read_payload(p.data);
+			std::vector<uint8_t> wrappedData(p.data, p.data + p.dataSize);
+			//theBlock->decoder.read_payload(wrappedData.data());
 
 			// Decrement DOF for this block
 			--(theBlock->DOF);
