@@ -193,7 +193,7 @@ public:
 			// Loop thorough packets in flight, oldest to newest. Look for 
 			// high-delay packets and count them as lost	
 			// Note this doesn't use std deviation, which would be a better idea
-			while(seqNum <= seqNumNext &&
+			while(seqNum < seqNumNext &&
 				rttInfo.average*10 < (now-sentTimeStamps[seqNum])){
 				
 				std::cout << "Loss Detected - seqNum = " << seqNum << std::endl;
@@ -210,11 +210,19 @@ public:
  
 	void adjustForLostPacket(blockInfo* blockLostFrom){
 		// Adjust the loss probability and the RTT, as well as increment tokens
-		std::cout << "adjusting for lost packet " << std::endl;
+		
+
+		std::cout << "adjusting for lost packet in block: " 
+			<< blockLostFrom->offsetInFile << " Packets in flight " 
+			<< blockLostFrom->numberOfPacketsInFlight << std::endl;
+		std::cout << " dataSize " << blockLostFrom->data.size() << std::endl;
+
 		blockLostFrom->blockInfoMutex.lock();
+		std::cout << "lock aquired" << std::endl;
 		//blockLostFrom->numberOfPacketsInFlight -= 1;
 		blockLostFrom->blockInfoMutex.unlock();
 		lossProbability = lossProbability*(1-alpha)*(1-alpha) + alpha;
+		std::cout << "Loss lossProbability = " << lossProbability << std::endl;
 	}
 
 	Packet* calculatePacketToSend(){
@@ -229,6 +237,7 @@ public:
 		// packets have been sent for the reciever to decode 
 
 		std::list<blockInfo*>::iterator it;
+
 		for(it = currentBlocksBeingSent.begin(); 
 			it != currentBlocksBeingSent.end(); 
 			++it){
@@ -306,9 +315,12 @@ public:
 
 		// Add the packet's seqnece number to the map of seqence numbers
 		mapSeqNumToBlockInfo.push_back(block);
+		std::cout << "put block: " << block->offsetInFile << " Into position" 
+			<< mapSeqNumToBlockInfo.size() << std::endl;
 
-		std::cout << "Data looks like: " << p->data << std::endl;
+
 		block->blockInfoMutex.unlock(); // release lock
+		
 		return p;		
 	}
 // TODO NOTE THAT THE TIMEOUT FOR LOSSES SEEMS TO CAUSE SEG FAULTS
@@ -406,7 +418,6 @@ int SenderManager::setDataInBlock(
 		while(true);
 	}
 	std::cout << "Handing over " << amountToSend 
-
 		<< " bytes to flow" << std::endl;
 
 	*dataToSet = std::vector<uint8_t>(
@@ -423,6 +434,7 @@ int main(){
 	srand(time(NULL));
 	std::vector<uint8_t> dataToSend(1000*PACKET_SIZE);
 	std::generate(dataToSend.begin(), dataToSend.end(), rand);
+	dataToSend[0] = 0; dataToSend[1] = 0; dataToSend[2] = 0;
 
 	SenderManager manager(dataToSend);
 

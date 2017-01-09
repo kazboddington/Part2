@@ -16,6 +16,13 @@
 #define FLOW2_DEST "6000"
 #define PACKET_SIZE 1024
 
+void printData(uint8_t data[], int length){
+	std::cout << "Data looks like: ";
+	for(int i = 0; i < length; i++)
+		std::cout << std::hex << (int)data[i];
+	std::cout << std::dec << std::endl;
+}
+
 class RecieverManager{
 private: 
 	PacketReciever reciever;
@@ -45,12 +52,26 @@ public:
 		// (3) the number of degrees of freedom in the first block number
 		
 		uint32_t blockSize = 250;
+
+		kodocpp::decoder_factory decoder_factory(
+			kodocpp::codec::full_vector,
+			kodocpp::field::binary8,
+			blockSize,
+			PACKET_SIZE);
+
+		kodocpp::decoder decoder = decoder_factory.build();
+
+		std::vector<uint8_t> dataIn(decoder.block_size());
+
+		decoder.set_mutable_symbols(
+			dataIn.data(), decoder.block_size());
+
 		while (true){
 			Packet p = reciever.listenOnce();
-			std::cout << "Recieved packet SeqNum = " << p.seqNum 
+			std::cout << "\e[A\e[ARecieved packet SeqNum = " << p.seqNum
 				<< " Data size = " << p.dataSize << std::endl;
 
-			
+				
 			if(recievedBlocksByOffset.find(p.offsetInFile) 
 					== recievedBlocksByOffset.end()){
 				// Block does not yet exist so create new block
@@ -76,22 +97,23 @@ public:
 				std::cout << "Adding block to map" << std::endl;
 				recievedBlocksByOffset.insert({p.offsetInFile, newBlock});
 			}
+		
 
 			recvBlockInfo* theBlock	= &recievedBlocksByOffset[p.offsetInFile]; 
 
-			std::cout << "Data looks like: " << p.data << std::endl;
 			// Hand over data for the decoder
 			std::vector<uint8_t> wrappedData(p.data, p.data + p.dataSize);
-			//theBlock->decoder.read_payload(wrappedData.data());
+			decoder.read_payload(wrappedData.data());
 
 			// Decrement DOF for this block
 			--(theBlock->DOF);
 			theBlock->DOF = std::max((int)theBlock->DOF, 0);
 			std::cout << "DOF = " << theBlock->DOF << std::endl;
 	
-			if(theBlock->DOF <= 0 || theBlock->decoder.is_complete()){
+			if(decoder.is_complete()){
 				std::cout << "DECODED ALL DATA" << std::endl;
-				//while(true);
+				printData(dataIn.data(), 50);
+				while(true);
 			}
 			
 			// create new packet and set fields 
@@ -100,18 +122,15 @@ public:
 			ack->currentBlockDOF = theBlock->DOF;
 			ack->seqNum = p.seqNum;
 
-			std::cout << "currentBlockDOF = " << p.currentBlockDOF << std::endl;
-		
-				
 			// TODO set DOF and current block
 				
 			
 			sender.sendPacket(ack);
-			std::cout << " ... Ack sent " << std::endl << std::endl;
 			delete ack;
 		}
 	}
 };
+
 
 int main(){
 	RecieverManager flow1(FLOW1_SOURCE, FLOW1_DEST);
