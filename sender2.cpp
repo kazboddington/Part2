@@ -62,7 +62,7 @@ private:
 
 		// TODO not used yet, but will be used to replace current way of
 		// calculating the number of packets in flight per block
-		uint32_t numberOfPacketsinFlight; 
+		uint32_t numberOfPacketsInFlight; 
 	}blockInfo;
 
 	std::list<blockInfo*> currentBlocksBeingSent; 
@@ -109,7 +109,7 @@ public:
 		// (4) Increament tokens
 		while(true){
 			Packet p = reciever.listenOnce();
-			std::cout << "Ack recieved, seqNum = " << p.seqNum << std::endl;	
+			std::cout << "ACK RECIEVED seqNum = " << p.seqNum << std::endl;	
 
 			// Adjust RTT
 			auto packetRtt = std::chrono::high_resolution_clock::now()
@@ -121,6 +121,27 @@ public:
 
 			// TODO check for timeouts	
 			
+			blockInfo* theBlock = mapSeqNumToBlockInfo[p.seqNum];
+
+			theBlock->blockInfoMutex.lock();
+
+			std::cout << "Block offset recieved from = " 
+				<< theBlock->offsetInFile << std::endl
+				<< "decrementing packets in flight from: " 
+				<< theBlock->numberOfPacketsInFlight
+				<< std::endl;
+
+			--(theBlock->numberOfPacketsInFlight);
+			theBlock->ackedDOF 
+				= std::min(p.currentBlockDOF, theBlock->ackedDOF);
+			std::cout << "p.currentBlockDOF " << p.currentBlockDOF 
+				<< " theBlock->ackedDOF = " << theBlock->ackedDOF
+				<< std::endl;
+			std::cout << "currentBlockDOF set to: " << theBlock->ackedDOF
+				<< std::endl;
+
+			theBlock->blockInfoMutex.unlock();	
+
 			// Adjust  lastSeqNumAcked, currentDOF
 			lastSeqNumAckd = std::max(lastSeqNumAckd, (int)p.seqNum);
 
@@ -191,12 +212,11 @@ public:
 		// Adjust the loss probability and the RTT, as well as increment tokens
 		std::cout << "adjusting for lost packet " << std::endl;
 		blockLostFrom->blockInfoMutex.lock();
-		blockLostFrom->numberOfPacketsinFlight -= 1;
+		blockLostFrom->numberOfPacketsInFlight -= 1;
 		blockLostFrom->blockInfoMutex.unlock();
 		lossProbability = lossProbability*(1-alpha)*(1-alpha) + alpha;
 		tokens++;
 	}
-
 
 	Packet* calculatePacketToSend(){
 		// Creates packet on heap of the correct data to send 
@@ -222,14 +242,14 @@ public:
 
 			std::cout << "Mutex aquired" << std::endl
 				<< "Number of packets in flight: "
-				<< loopedBlock->numberOfPacketsinFlight
+				<< loopedBlock->numberOfPacketsInFlight
 				<< ", lossProbability = " << lossProbability
 			   	<< ", DOF for this block: " << loopedBlock->ackedDOF
 				<< std::endl;
 
 
 			int expectedArrivals =
-			   	loopedBlock->numberOfPacketsinFlight * lossProbability 
+			   	loopedBlock->numberOfPacketsInFlight * lossProbability 
 				+ loopedBlock->data.size() / PACKET_SIZE 
 				- loopedBlock->ackedDOF;
 			std::cout << "expectedArrivals = " << expectedArrivals << std::endl;
@@ -238,7 +258,7 @@ public:
 				std::cout << "Generating packet from block at offset "
 					<< loopedBlock->offsetInFile << std::endl;
 				loopedBlock->blockInfoMutex.unlock();
-				Packet* p =generatePacketFromBlock(*it);
+				Packet* p = generatePacketFromBlock(*it);
 				return p;
 			}
 			loopedBlock->blockInfoMutex.unlock();
@@ -251,7 +271,7 @@ public:
 
 		blockInfo* theBlock = currentBlocksBeingSent.back();
 		Packet* p = generatePacketFromBlock(theBlock);
-	
+
 		return p;
 	}
 	Packet* generatePacketFromBlock(blockInfo* block){
@@ -264,12 +284,15 @@ public:
 		block->blockInfoMutex.lock(); // Take lock
 		
 		// Generate packet from encoder
-		std::cout << "Writing the payload to the packet..." << std::endl;		
-		block->encoder.write_payload(p->data);
+		std::cout << "Writing the payload to the packet..." << std::endl;
+	
+		uint32_t bytesUsed = block->encoder.write_payload(p->data);
+		std::cout << "Payload Size = " << bytesUsed << std::endl;
 		
 		// Update number of packets in flight since we're sendin a packet
-		std::cout << "Incrementing number of packets in flight..." << std::endl;
-		(block->numberOfPacketsinFlight)++;
+		std::cout << "Incrementing number of packets in flight...";
+		(block->numberOfPacketsInFlight)++;
+		std::cout << " value = " << block->numberOfPacketsInFlight << std::endl;
 
 		// set the packt's offset field
 		p->offsetInFile = block->offsetInFile;
@@ -299,7 +322,7 @@ public:
 		blockInfo* theBlock = new blockInfo();
 
 		// Temporart fixed length blocks of 1000 packets
-		uint32_t maxNumberOfPacketsInBlock = 1000;
+		uint32_t maxNumberOfPacketsInBlock = 250;
 
 		// Grab data from manager
 		theBlock->data = 
@@ -321,13 +344,16 @@ public:
 		std::cout << "Building encoder..." << std::endl;
 		theBlock->encoder = encoder_factory.build();
 
-		std::cout << "Binding data to encoder: dataSize = "
+		std::cout << "Binding data to encoder: maxDataSize = "
 		   << theBlock->data.size()	<< std::endl;
+
+		std::cout << "Block Size = " << theBlock->encoder.block_size() 
+			<< std::endl;
 		theBlock->encoder.set_const_symbols(
 				theBlock->data.data(),
 				theBlock->data.size());
 
-		std::cout << "CSetting number of DOF in the block" << std::endl;
+		std::cout << "Setting number of DOF in the block" << std::endl;
 		theBlock->ackedDOF = numberOfPacketsInBlock;
 		
 		return theBlock;
