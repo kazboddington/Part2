@@ -135,6 +135,7 @@ public:
 
 				// Create packet to send, setting fields etc.
 				Packet *p = calculatePacketToSend();
+				std::cout << "Packet calculated to send" << std::endl;
 
 				// Save timestamp 
 				sentTimeStamps.push_back( 
@@ -156,30 +157,30 @@ public:
 
 	void checkForLosses(){
 		// Loops, looking at the packets that are currently in flight,
-		// checking  to see if there are losses
+		// checking to see if there are losses
 		
 		int seqNum = lastSeqNumAckd + 1;			
 		while(true){
-			usleep(1000); // 1 second?
-			if(seqNum >= seqNumNext)
-				continue;
+			usleep(1000); // loop every 1 millisecond 
+
+			// No need to loop if we've already recieved the all acks 
+			if(seqNum >= seqNumNext) continue;
+
 			auto now = std::chrono::high_resolution_clock::now();
-			//std::cout << "checking for loss... " << std::endl;
-			//std::cout << "seqNum = " << seqNum << " sentTimeStamps[seqNum] = " 
-			//	<< sentTimeStamps[seqNum].time_since_epoch().count() 
-			//	<< std::endl;
-			//std::cout << "now = " << now.time_since_epoch().count()
-			//	<< std::endl;
-			//std::chrono::duration<double> durationOfPacket = 
-			//	std::chrono::duration<double>(now-sentTimeStamps[seqNum]);
-			//std::cout << "Packet Duration = " << durationOfPacket.count()
-			//	<< std::endl;
-			//std::cout << "RTTaverage*1.5 = " << (rttInfo.average.count()*1.5);
+
+			// Loop thorough packets in flight, oldest to newest. Look for 
+			// high-delay packets and count them as lost	
+			// Note this doesn't use std deviation, which would be a better idea
 			while(seqNum <= seqNumNext &&
 				rttInfo.average*1.5 < (now-sentTimeStamps[seqNum])){
+				
 				std::cout << "Loss Detected... " << std::endl;
+
 				adjustForLostPacket(mapSeqNumToBlockInfo[seqNum]);
+				
+				// Update the lastSeqNumAcked as if packet is acked
 				lastSeqNumAckd++;
+
 				seqNum++;
 			}
 		}
@@ -205,13 +206,22 @@ public:
 		Packet *p = new Packet();
 		p->seqNum = seqNumNext;
 		seqNumNext++;
+
 		// Iterate through block infos until we find a block in which not enough
-		// packets have been sent for the reciever to decode. 
+		// packets have been sent for the reciever to decode 
+			
+		std::cout << "currentBlocksBeingSent length = "
+			<< currentBlocksBeingSent.size() << std::endl;
+
+
 		std::list<blockInfo*>::iterator it;
-		for(currentBlocksBeingSent.begin(); 
+		for(it = currentBlocksBeingSent.begin(); 
 			it != currentBlocksBeingSent.end(); 
 			++it){
+			
+			std::cout << "Grabbing lock mutex... " << std::endl;
 			(*it)->blockInfoMutex.lock();
+			std::cout << "Mutex aquired" << std::endl;
 			int expectedArrivals = (*it)->numberOfPacketsinFlight*lossProbability
 				+ (*it)->ackedDOF;
 			if(expectedArrivals < (int)(*it)->data.size()){
@@ -265,6 +275,27 @@ public:
 	blockInfo* calculateNewBlock(){
 		blockInfo* theBlock = new blockInfo();
 
+		// Temporart fixed length blocks of 1000 packets
+		uint32_t numberofPacketsInBlock = 1000;
+
+		// Grab data from manager
+		theBlock->data = manager.getDataToSend(numberofPacketsInBlock);
+		std::cout << "Got data to send" << std::endl;
+		std::cout << " looks like: " << theBlock->data.data() << std::endl;
+		// TODO set offset in blockInfo
+
+		// Create and encoder and accociate it with the data
+		kodocpp::encoder_factory encoder_factory(
+			kodocpp::codec::full_vector,
+			kodocpp::field::binary8,
+			numberofPacketsInBlock,
+			PACKET_SIZE);
+		theBlock->encoder = encoder_factory.build();
+		theBlock->encoder.set_const_symbols(
+				theBlock->data.data(),
+				theBlock->data.size());
+
+		theBlock->ackedDOF = numberofPacketsInBlock;
 		
 		return theBlock;
 	}
@@ -295,16 +326,18 @@ std::vector<uint8_t> SenderManager::getDataToSend(int blockSizeWanted){
 	int amountToSend = std::min(
 			(int)(dataToSend.size() - sentUpTo),
 			(int)blockSizeWanted);
+	std::cout << "Handing over " << amountToSend 
+		<< " bytes to flow" << std::endl;
 	return std::vector<uint8_t>(
 			dataToSend.begin() + sentUpTo,
 			dataToSend.begin() + sentUpTo + amountToSend);
 }
 
 
-
 int main(){
 	std::vector<uint8_t> dataToSend(100000);
 	std::generate(dataToSend.begin(), dataToSend.end(), rand);
+
 	SenderManager manager(dataToSend);
 
 	SenderFlowManager flow1 = 
@@ -315,15 +348,16 @@ int main(){
 	manager.addSubflow(&flow1);
 	manager.addSubflow(&flow2);
 
-	std::cout << "manager subflows size" << manager.getSubflows().size();
+	std::cout << "manager subflows size" << manager.getSubflows().size() 
+		<< std::endl;
 
 	std::thread flow1SendThread(
 		&SenderFlowManager::sendLoop, &flow1);
-	std::thread flow1RecieveThread(
-		&SenderFlowManager::recieveAndProcessAcks, &flow1);
-	std::thread flow1LossDetectThread(
-			&SenderFlowManager::checkForLosses, &flow1);
+	//std::thread flow1RecieveThread(
+	//	&SenderFlowManager::recieveAndProcessAcks, &flow1);
+	//std::thread flow1LossDetectThread(
+	//		&SenderFlowManager::checkForLosses, &flow1);
 
 	flow1SendThread.join();
-	flow1RecieveThread.join();
- }
+	//flow1RecieveThread.join();
+}
