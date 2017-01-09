@@ -3,7 +3,7 @@
 #include <thread> 
 #include <vector>
 #include <mutex>
-
+#include <kodocpp/kodocpp.hpp>
 #include "PacketReciever.h"
 #include "PacketSender.h"
 
@@ -12,15 +12,20 @@
 #define FLOW2_SOURCE "9000"
 #define FLOW2_DEST "6000"
 
-#define BLOCK_SIZE 100
-
 class RecieverManager{
 private: 
 	PacketReciever reciever;
 	PacketSender sender;
-	int nextBlockToDecode = 0;
 	std::vector<int> packetsRecievedPerBlock;
+	typedef struct recvBlockInfo{
+		uint32_t offset;			
+		kodocpp::decoder decoder;
+		uint32_t DOF;
+	}recvBlockInfo;
+
+	std::vector<recvBlockInfo> recievedBlocks;
 public:
+
 	RecieverManager(const char sourcePort[], const char destinationPort[]):
 		reciever(atoi(sourcePort)),
 		sender("127.0.0.1", destinationPort){
@@ -35,35 +40,18 @@ public:
 		while (true){
 			Packet p = reciever.listenOnce();
 			std::cout << "Recieved packet SeqNum = " << p.seqNum << std::endl;
-			if(decodeBlock(&p) == 0){
-				//if((int)p.blockNo == nextBlockToDecode){
-				nextBlockToDecode++;
-				//}
-			}
 
-			// TODO processPacket
-			
 			Packet* ack = new Packet();
 
 			ack->seqNum = p.seqNum;
-			ack->blockNo = nextBlockToDecode;
 
 			// TODO set DOF and current block
 			
 			sender.sendPacket(ack);
 			std::cout << " ... Ack sent " << std::endl << std::endl;
-			std::cout << "blockNo = " << ack->blockNo << std::endl;
 			delete ack;
 		}
 	}
-	
-	int decodeBlock(Packet *p){
-		// Attempt to decode the block to which packet p belongs. return the 
-		// degrees of freedom (0 if block decoded) 
-		std::cout << "DOF currentBlock  = " <<
-			p->seqNum % BLOCK_SIZE << std::endl;
-		return (p->seqNum % BLOCK_SIZE);
-	}	
 };
 
 int main(){

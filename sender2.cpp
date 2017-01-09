@@ -32,7 +32,6 @@ public:
 	SenderManager(std::vector<uint8_t>& dataToSend);
 	void addSubflow(SenderFlowManager *subflow);
 	int getNumberOfBlocks();
-	std::vector<int> getEstimatedPacketsPerBlock();
 	std::vector<SenderFlowManager *> &getSubflows();
 	// Hands over a block of data for a flow to send to the reciever of the
 	// asked for size. 
@@ -54,8 +53,6 @@ private:
   	const double alpha = 0.1; // Used for updating loss probability
 	double lossProbability = 0;
 
-	
-
 	typedef struct blockInfo{
 		std::mutex blockInfoMutex; // Must Lock this before acccessing info
 		std::vector<uint8_t> data; // Data being sent, controlled by encoder
@@ -68,7 +65,7 @@ private:
 		uint32_t numberOfPacketsinFlight; 
 	}blockInfo;
 
-	std::list<blockInfo> currentBlocksBeingSent; 
+	std::list<blockInfo*> currentBlocksBeingSent; 
 	// Info for each block beingg sent by this flow
 	// Note that we delete blocks from this once they're sent
 	
@@ -135,39 +132,22 @@ public:
 		// Naiive implementation - poll tokens, and send packet if token free
 		while(true){
 			if(tokens != 0){ // Allowed to send
-				// (1) Calculate which packet is to be sent next
-				// (2) Save timestamp in order to calculate RTT and save seqNum
-				// and its accociated block
-				// (3) Send packet
-				// (4) Clean up remove token, increment seqNumNext, free packet
-
-				// (1) Firstly need to calculate number of packets expected to 
-				// be recieved by the reciever, given loss rates etc.
-				
-				std::vector<int> expectedToBeRecieved =
-				   	manager.getEstimatedPacketsPerBlock();
-				for(int block = 0; 
-						block < ((int)expectedToBeRecieved.size()-1); block++){
-					if (expectedToBeRecieved[block] >0){
-						std::cout << "Block " << block << ": ";
-						std::cout << expectedToBeRecieved[block] << std::endl;
-					}
-				}
 
 				// Create packet to send, setting fields etc.
-				// TODO set blocknum, save blocknum, seqNum accociation
 				Packet *p = calculatePacketToSend();
 
-				// (2) Save timestamp 
+				// Save timestamp 
 				sentTimeStamps.push_back( 
 					std::chrono::high_resolution_clock::now());
 
-				// (3) Send packet, setting seqNum, offset etc.
+				// Send packet
 				sender.sendPacket(p);
 				std::cout << "Packet sent, seqNum = " << p->seqNum;
 
-				// (4) Clean up
-				seqNumNext++;
+				// Reduce number of tokens since a packet is sent 
+				tokens--;
+
+				// Clean up
 				tokens--;
 				delete p;
 			}
@@ -207,8 +187,9 @@ public:
  
 	void adjustForLostPacket(blockInfo* blockLostFrom){
 		// Adjust the loss probability and the RTT, as well as increment tokens
-
+		blockLostFrom->blockInfoMutex.lock();
 		blockLostFrom->numberOfPacketsinFlight -= 1;
+		blockLostFrom->blockInfoMutex.unlock();
 		lossProbability -= lossProbability*(1-alpha)*(1-alpha) + alpha;
 		tokens++;
 	}
@@ -223,21 +204,42 @@ public:
 		
 		Packet *p = new Packet();
 		p->seqNum = seqNumNext;
-		
-
-		std::list<blockInfo>::iterator it;
+		seqNumNext++;
+		// Iterate through block infos until we find a block in which not enough
+		// packets have been sent for the reciever to decode. 
+		std::list<blockInfo*>::iterator it;
 		for(currentBlocksBeingSent.begin(); 
 			it != currentBlocksBeingSent.end(); 
 			++it){
-			
-			int expectedArrivals = it->numberOfPacketsinFlight*lossProbability
-				+ it->ackedDOF;
-			if(expectedArrivals < (int)it->data.size()){
-				it->encoder.write_payload(p->data);
-				p->offsetInFile = it->offsetInFile;
-				mapSeqNumToBlockInfo.push_back(&(*it));
+			(*it)->blockInfoMutex.lock();
+			int expectedArrivals = (*it)->numberOfPacketsinFlight*lossProbability
+				+ (*it)->ackedDOF;
+			if(expectedArrivals < (int)(*it)->data.size()){
+				(*it)->encoder.write_payload(p->data);
+				p->offsetInFile = (*it)->offsetInFile;
+				mapSeqNumToBlockInfo.push_back((*it));
+				return p;
 			}
-		}	
+		}
+
+		// None of the blocks in the list need packets sending. Create a new 
+		// block and generate a packet using it.
+		currentBlocksBeingSent.push_back(calculateNewBlock());
+
+		currentBlocksBeingSent.back()->blockInfoMutex.lock(); // Take lock
+		
+		// Generate packet from encoder
+		currentBlocksBeingSent.back()->encoder.write_payload(p->data);
+		
+		// Update number of packets in flight since we're sendin a packet
+		(currentBlocksBeingSent.back()->numberOfPacketsinFlight)++;
+
+		// set the packt's offset field
+		p->offsetInFile = currentBlocksBeingSent.back()->offsetInFile;
+
+		// Add the packet's seqnece number to the map of seqence numbers
+		mapSeqNumToBlockInfo.push_back(currentBlocksBeingSent.back());
+		currentBlocksBeingSent.back()->blockInfoMutex.unlock(); // release lock
 
 		return p;
 	}
@@ -258,6 +260,13 @@ public:
 	
 	double getLossProbability(){
 		return lossProbability;
+	}
+	
+	blockInfo* calculateNewBlock(){
+		blockInfo* theBlock = new blockInfo();
+
+		
+		return theBlock;
 	}
 	
 };
