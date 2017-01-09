@@ -11,7 +11,7 @@ typedef struct Packet{
 	unsigned int ackNum;
 	unsigned int offsetInFile;
 	unsigned short windowSize;
-	unsigned char data[1100];	
+	unsigned char data[1500];	
 }Packet;
 
 /* type 1 is a standard data packet                      */

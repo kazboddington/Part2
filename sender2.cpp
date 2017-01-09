@@ -35,7 +35,7 @@ public:
 	std::vector<SenderFlowManager *> &getSubflows();
 	// Hands over a block of data for a flow to send to the reciever of the
 	// asked for size. 
-	std::vector<uint8_t> getDataToSend(int dataSize);
+	std::vector<uint8_t> getDataToSend(int maxNumberOfPackets);
 };
 
 // Declaratin and implementatino of flowManager
@@ -117,7 +117,7 @@ public:
 			adjustRtt(packetRtt);
 
 			// Adjust loss probability
-			lossProbability -= lossProbability*(1-alpha)*(1-alpha) + alpha;
+			lossProbability = lossProbability*(1-alpha);
 
 			// TODO check for timeouts	
 			
@@ -143,14 +143,15 @@ public:
 
 				// Send packet
 				sender.sendPacket(p);
-				std::cout << "Packet sent, seqNum = " << p->seqNum;
+				std::cout << "Packet sent, seqNum = " << p->seqNum << std::endl;
 
 				// Reduce number of tokens since a packet is sent 
 				tokens--;
 
 				// Clean up
-				tokens--;
+				std::cout << "deleting packet..." << std::endl;
 				delete p;
+				std::cout << "done." << std::endl;
 			}
 		}
 	}
@@ -188,10 +189,11 @@ public:
  
 	void adjustForLostPacket(blockInfo* blockLostFrom){
 		// Adjust the loss probability and the RTT, as well as increment tokens
+		std::cout << "adjusting for lost packet " << std::endl;
 		blockLostFrom->blockInfoMutex.lock();
 		blockLostFrom->numberOfPacketsinFlight -= 1;
 		blockLostFrom->blockInfoMutex.unlock();
-		lossProbability -= lossProbability*(1-alpha)*(1-alpha) + alpha;
+		lossProbability = lossProbability*(1-alpha)*(1-alpha) + alpha;
 		tokens++;
 	}
 
@@ -203,55 +205,80 @@ public:
 			
 		// NOTE: Assume that the encoder is set up correctly
 		
-		Packet *p = new Packet();
-		p->seqNum = seqNumNext;
-		seqNumNext++;
 
 		// Iterate through block infos until we find a block in which not enough
 		// packets have been sent for the reciever to decode 
-			
-		std::cout << "currentBlocksBeingSent length = "
-			<< currentBlocksBeingSent.size() << std::endl;
-
 
 		std::list<blockInfo*>::iterator it;
 		for(it = currentBlocksBeingSent.begin(); 
 			it != currentBlocksBeingSent.end(); 
 			++it){
+			blockInfo* loopedBlock = *it;
+
+			std::cout << "Grabbing block mutex for block at offset "
+			   << loopedBlock->offsetInFile << std::endl;
 			
-			std::cout << "Grabbing lock mutex... " << std::endl;
-			(*it)->blockInfoMutex.lock();
-			std::cout << "Mutex aquired" << std::endl;
-			int expectedArrivals = (*it)->numberOfPacketsinFlight*lossProbability
-				+ (*it)->ackedDOF;
-			if(expectedArrivals < (int)(*it)->data.size()){
-				(*it)->encoder.write_payload(p->data);
-				p->offsetInFile = (*it)->offsetInFile;
-				mapSeqNumToBlockInfo.push_back((*it));
+			loopedBlock->blockInfoMutex.lock();
+
+			std::cout << "Mutex aquired" << std::endl
+				<< "Number of packets in flight: "
+				<< loopedBlock->numberOfPacketsinFlight
+				<< ", lossProbability = " << lossProbability
+			   	<< ", DOF for this block: " << loopedBlock->ackedDOF
+				<< std::endl;
+
+
+			int expectedArrivals =
+			   	loopedBlock->numberOfPacketsinFlight * lossProbability 
+				+ loopedBlock->data.size() / PACKET_SIZE 
+				- loopedBlock->ackedDOF;
+			std::cout << "expectedArrivals = " << expectedArrivals << std::endl;
+
+			if(expectedArrivals < (int)loopedBlock->data.size()){
+				std::cout << "Generating packet from block at offset "
+					<< loopedBlock->offsetInFile << std::endl;
+				loopedBlock->blockInfoMutex.unlock();
+				Packet* p =generatePacketFromBlock(*it);
 				return p;
 			}
+			loopedBlock->blockInfoMutex.unlock();
 		}
 
 		// None of the blocks in the list need packets sending. Create a new 
 		// block and generate a packet using it.
+		std::cout << "Creating new block" << std::endl;
 		currentBlocksBeingSent.push_back(calculateNewBlock());
 
-		currentBlocksBeingSent.back()->blockInfoMutex.lock(); // Take lock
+		blockInfo* theBlock = currentBlocksBeingSent.back();
+		Packet* p = generatePacketFromBlock(theBlock);
+	
+		return p;
+	}
+	Packet* generatePacketFromBlock(blockInfo* block){
+		Packet *p = new Packet();
+	
+		// TODO decide a clearer place for this to go...		
+		p->seqNum = seqNumNext;
+		seqNumNext++;
+
+		block->blockInfoMutex.lock(); // Take lock
 		
 		// Generate packet from encoder
-		currentBlocksBeingSent.back()->encoder.write_payload(p->data);
+		std::cout << "Writing the payload to the packet..." << std::endl;		
+		block->encoder.write_payload(p->data);
 		
 		// Update number of packets in flight since we're sendin a packet
-		(currentBlocksBeingSent.back()->numberOfPacketsinFlight)++;
+		std::cout << "Incrementing number of packets in flight..." << std::endl;
+		(block->numberOfPacketsinFlight)++;
 
 		// set the packt's offset field
-		p->offsetInFile = currentBlocksBeingSent.back()->offsetInFile;
+		p->offsetInFile = block->offsetInFile;
 
 		// Add the packet's seqnece number to the map of seqence numbers
-		mapSeqNumToBlockInfo.push_back(currentBlocksBeingSent.back());
-		currentBlocksBeingSent.back()->blockInfoMutex.unlock(); // release lock
+		mapSeqNumToBlockInfo.push_back(block);
 
-		return p;
+		block->blockInfoMutex.unlock(); // release lock
+		return p;		
 	}
 
 	void adjustRtt(std::chrono::duration<double, std::micro> measurement){
@@ -268,19 +295,19 @@ public:
 			<< " s" << std::endl;
 	}
 	
-	double getLossProbability(){
-		return lossProbability;
-	}
-	
 	blockInfo* calculateNewBlock(){
 		blockInfo* theBlock = new blockInfo();
 
 		// Temporart fixed length blocks of 1000 packets
-		uint32_t numberofPacketsInBlock = 1000;
+		uint32_t maxNumberOfPacketsInBlock = 1000;
 
 		// Grab data from manager
-		theBlock->data = manager.getDataToSend(numberofPacketsInBlock);
-		std::cout << "Got data to send" << std::endl;
+		theBlock->data = 
+			manager.getDataToSend(maxNumberOfPacketsInBlock);
+
+		uint32_t numberOfPacketsInBlock = theBlock->data.size() / PACKET_SIZE;
+		std::cout << "Got data to send, size = " 
+			<< theBlock->data.size() << std::endl;
 		std::cout << " looks like: " << theBlock->data.data() << std::endl;
 		// TODO set offset in blockInfo
 
@@ -288,14 +315,20 @@ public:
 		kodocpp::encoder_factory encoder_factory(
 			kodocpp::codec::full_vector,
 			kodocpp::field::binary8,
-			numberofPacketsInBlock,
+			numberOfPacketsInBlock,
 			PACKET_SIZE);
+
+		std::cout << "Building encoder..." << std::endl;
 		theBlock->encoder = encoder_factory.build();
+
+		std::cout << "Binding data to encoder: dataSize = "
+		   << theBlock->data.size()	<< std::endl;
 		theBlock->encoder.set_const_symbols(
 				theBlock->data.data(),
 				theBlock->data.size());
 
-		theBlock->ackedDOF = numberofPacketsInBlock;
+		std::cout << "CSetting number of DOF in the block" << std::endl;
+		theBlock->ackedDOF = numberOfPacketsInBlock;
 		
 		return theBlock;
 	}
@@ -322,10 +355,10 @@ std::vector<SenderFlowManager *> &SenderManager::getSubflows(){
 	return subflows;
 }
 
-std::vector<uint8_t> SenderManager::getDataToSend(int blockSizeWanted){
+std::vector<uint8_t> SenderManager::getDataToSend(int maxNumberOfPackets){
 	int amountToSend = std::min(
 			(int)(dataToSend.size() - sentUpTo),
-			(int)blockSizeWanted);
+			(int)maxNumberOfPackets*PACKET_SIZE);
 	std::cout << "Handing over " << amountToSend 
 		<< " bytes to flow" << std::endl;
 	return std::vector<uint8_t>(
@@ -335,7 +368,8 @@ std::vector<uint8_t> SenderManager::getDataToSend(int blockSizeWanted){
 
 
 int main(){
-	std::vector<uint8_t> dataToSend(100000);
+	srand(time(NULL));
+	std::vector<uint8_t> dataToSend(1000*PACKET_SIZE);
 	std::generate(dataToSend.begin(), dataToSend.end(), rand);
 
 	SenderManager manager(dataToSend);
@@ -353,11 +387,11 @@ int main(){
 
 	std::thread flow1SendThread(
 		&SenderFlowManager::sendLoop, &flow1);
-	//std::thread flow1RecieveThread(
-	//	&SenderFlowManager::recieveAndProcessAcks, &flow1);
-	//std::thread flow1LossDetectThread(
-	//		&SenderFlowManager::checkForLosses, &flow1);
+	std::thread flow1RecieveThread(
+		&SenderFlowManager::recieveAndProcessAcks, &flow1);
+	std::thread flow1LossDetectThread(
+			&SenderFlowManager::checkForLosses, &flow1);
 
 	flow1SendThread.join();
-	//flow1RecieveThread.join();
+	flow1RecieveThread.join();
 }
