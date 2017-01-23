@@ -60,10 +60,10 @@ void PacketSender::prepareSocket()
 	addrListen.sin_port = 0; // htons(9999); Change this to send from a specific por  t
 
 	result = bind(sock, (sockaddr*)&addrListen, sizeof(addrListen));
-	if (result == -1)
+	if (result < 0)
 	{
 		int lasterror = errno;
-		std::cout << "error: " << lasterror;
+		std::cout << "Error while binding: " << lasterror;
 		perror("Error: ");
 		exit(1);
 	}
@@ -73,8 +73,8 @@ void PacketSender::prepareSocket()
 	if (result != 0)
 	{
 		int lasterror = errno;
-		std::cout << "Error: " << lasterror;		
 		perror("Error: ");
+		std::cout << "Error with result: result = " << result << " LastError: " << lasterror;		
 		exit(1);
 	}
 }

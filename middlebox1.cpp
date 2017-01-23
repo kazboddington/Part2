@@ -1,5 +1,3 @@
-#define DESTINATION_PORT "9000"
-#define SOURCE_PORT "10000"
 #define LOSS_PROBABILITY 0.01
 #define DELAY 100 /* NOTE defined in ms */
 
@@ -18,9 +16,17 @@ void sendPacket(Packet p, PacketSender &packetSender){
 	packetSender.sendPacket(&p);
 }
 
-int main(){
-	PacketReciever reciever(atoi(SOURCE_PORT));
-	PacketSender sender("127.0.0.1",DESTINATION_PORT);
+int main(int argc, char *argv[]){
+	if (argc != 3){
+		std::cout << "Usage middlebox [IN_PORT] [OUT_PORT]" << std::endl;	
+		return 0;
+	}
+		
+	char* destinationPort = argv[1];
+	char* sourcePort = argv[2];
+
+	PacketReciever reciever(atoi(sourcePort));
+	PacketSender sender("127.0.0.1",destinationPort);
 	
 	TimerManager timer;
 	std::thread timerThread(&TimerManager::manageTasks, std::ref(timer));
