@@ -22,12 +22,14 @@ int main(int argc, char *argv[]){
 		return 0;
 	}
 		
-	char* destinationPort = argv[1];
-	char* sourcePort = argv[2];
+	char* sourcePort = argv[1];
+	char* destinationPort = argv[2];
 
 	PacketReciever reciever(atoi(sourcePort));
+	std::cout << "Listening on port " << sourcePort << std::endl; 
 	PacketSender sender("127.0.0.1",destinationPort);
-	
+	std::cout << "Sending on port " << destinationPort << std::endl; 
+
 	TimerManager timer;
 	std::thread timerThread(&TimerManager::manageTasks, std::ref(timer));
 	std::chrono::duration<double, std::milli> delay(DELAY);	
