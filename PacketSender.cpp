@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <iostream>
+#include <chrono>
 
 #include "PacketSender.h"
 
@@ -40,7 +41,7 @@ int PacketSender::resolvehelper(
 	result = getaddrinfo(hostname, service, &hints, &result_list);
 	if (result == 0)
 	{
-		//ASSERT(result_list->ai_addrlen <= sizeof(sockaddr_in));
+		if((result_list->ai_addrlen <= sizeof(sockaddr_in)) == false) std::cout << "something wrong witht the address" << std::endl;
 		memcpy(pAddr, result_list->ai_addr, result_list->ai_addrlen);
 		freeaddrinfo(result_list);
 	}
@@ -48,22 +49,21 @@ int PacketSender::resolvehelper(
 	return result;
 }
 
-int PacketSender::prepareSocket()
+void PacketSender::prepareSocket()
 {
 	// Set up socket and bind it to a  high random sending port
 	int result = 0;
 	sock = socket(AF_INET, SOCK_DGRAM, 0);
-	char szIP[100];
 	
 	sockaddr_in addrListen = {}; // zero-int, sin_port is 0, which picks a random port for bind.
 	addrListen.sin_family = AF_INET;
 	addrListen.sin_port = 0; // htons(9999); Change this to send from a specific por  t
 
 	result = bind(sock, (sockaddr*)&addrListen, sizeof(addrListen));
-	if (result == -1)
+	if (result < 0)
 	{
 		int lasterror = errno;
-		std::cout << "error: " << lasterror;
+		std::cout << "Error while binding: " << lasterror;
 		perror("Error: ");
 		exit(1);
 	}
@@ -73,19 +73,19 @@ int PacketSender::prepareSocket()
 	if (result != 0)
 	{
 		int lasterror = errno;
-		std::cout << "Error: " << lasterror;		
 		perror("Error: ");
+		std::cout << "Error with result: result = " << result << " LastError: " << lasterror;		
 		exit(1);
 	}
 }
 
-int PacketSender::sendPacket(const char* msg)
+void PacketSender::sendPacket(const char* msg)
 {
 	size_t msg_length = strlen(msg);
 	sendPacket(msg, msg_length);
 }
 
-int PacketSender::sendPacket(const char* msg, int length)
+void PacketSender::sendPacket(const char* msg, int length)
 {
 	int result = sendto(sock, msg, length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
 	//std::cout << result << " bytes sent" << std::endl;
@@ -95,8 +95,9 @@ int PacketSender::sendPacket(const char* msg, int length)
 	}		
 }
 
-int PacketSender::sendPacket(Packet *p)
+void PacketSender::sendPacket(Packet *p)
 {
+	// Set the timePoint inside the packer to now
 	size_t msg_length = sizeof(Packet);
 	sendPacket(reinterpret_cast<const char*>(p), msg_length);
 }

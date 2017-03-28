@@ -3,13 +3,15 @@
 
 enum Type {DATA, ACK}; 	
 
-typedef struct Packets{
+typedef struct Packet{
 	enum Type type;
+	unsigned int currentBlockDOF;
 	unsigned short dataSize;
 	unsigned int seqNum;
 	unsigned int ackNum;
+	unsigned int offsetInFile;
 	unsigned short windowSize;
-	unsigned char data[1024];	
+	unsigned char data[1500];	
 }Packet;
 
 /* type 1 is a standard data packet                      */
