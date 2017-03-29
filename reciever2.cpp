@@ -134,5 +134,11 @@ public:
 int main(){
 	RecieverManager flow1(FLOW1_SOURCE, FLOW1_DEST);
 	RecieverManager flow2(FLOW2_SOURCE, FLOW2_DEST);
-	flow1.recievePackets();
+	std::thread flow1Thread(&RecieverManager::recievePackets, std::ref(flow1));
+	std::thread flow2Thread(&RecieverManager::recievePackets, std::ref(flow2));
+
+	flow1Thread.join();
+	flow2Thread.join();
+
+	return 0;
 }

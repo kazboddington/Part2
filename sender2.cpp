@@ -50,7 +50,7 @@ private:
 	int seqNumNext = 0; // An index of the next packet to be sent
 	int lastSeqNumAckd = 0; // The last seqence number to be acknowledged
 
-	std::atomic<int> tokens = {5}; // The number of packets availble to be sent
+	std::atomic<int> tokens = {50}; // The number of packets availble to be sent
 
 	int DOFCurrentBlock = 0; // Degrees of freedom of current block
 
@@ -119,6 +119,8 @@ public:
 			// Adjust RTT
 			auto packetRtt = std::chrono::steady_clock::now()
 			   - sentTimeStamps[p.seqNum]; 
+			// initialise rtt estimate
+			if (p.seqNum == 0) rttInfo.average = packetRtt;
 			adjustRtt(packetRtt);
 
 			// Check Packet is not already lost 
@@ -501,6 +503,18 @@ int main(){
 	std::thread flow1LossDetectThread(
 			&SenderFlowManager::checkForLosses, &flow1);
 
+	std::thread flow2SendThread(
+		&SenderFlowManager::sendLoop, &flow2);
+	std::thread flow2RecieveThread(
+		&SenderFlowManager::recieveAndProcessAcks, &flow2);
+	std::thread flow2LossDetectThread(
+			&SenderFlowManager::checkForLosses, &flow2);
+
+
 	flow1SendThread.join();
 	flow1RecieveThread.join();
+
+	flow2SendThread.join();
+	flow2RecieveThread.join();
 }
+
