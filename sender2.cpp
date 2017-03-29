@@ -7,6 +7,7 @@
 #include <list>
 #include <mutex>
 #include <map>
+#include <atomic>
 
 #include <kodocpp/kodocpp.hpp>
 #include "netcode/decoder.hh"
@@ -46,11 +47,11 @@ private:
 	PacketReciever reciever;
 	SenderManager &manager;
 
-	std::mutex seqNumMux; // Take this to access seqBumNext, lastSeqNumNext,
 	int seqNumNext = 0; // An index of the next packet to be sent
 	int lastSeqNumAckd = 0; // The last seqence number to be acknowledged
 
-	int tokens = 10; // The number of packets availble to be sent
+	std::atomic<int> tokens = {10}; // The number of packets availble to be sent
+
 	int DOFCurrentBlock = 0; // Degrees of freedom of current block
 
   	const double alpha = 0.01; // Used for updating loss probability
@@ -63,8 +64,6 @@ private:
 		kodocpp::encoder encoder;
 		uint32_t ackedDOF;
 
-		// TODO not used yet, but will be used to replace current way of
-		// calculating the number of packets in flight per block
 		uint32_t numberOfPacketsInFlight; 
 	}blockInfo;
 
@@ -74,7 +73,7 @@ private:
 	
 	std::vector<std::chrono::high_resolution_clock::time_point> sentTimeStamps;
 	std::vector<blockInfo*> mapSeqNumToBlockInfo;
-	std::map<unsigned int, bool> isTimedOut;
+	std::map<unsigned int, bool> finishedWithPacket;
 public:
 	// The four connections held by the sender module
 
@@ -112,17 +111,21 @@ public:
 		// (4) Increament tokens
 		while(true){
 			Packet p = reciever.listenOnce();
-			std::cout << "ACK RECIEVED seqNum = " << p.seqNum << std::endl;	
+			std::cout << std::endl <<"ACK RECIEVED seqNum = " 
+				<< p.seqNum << std::endl;	
 
 			// Adjust RTT
 			auto packetRtt = std::chrono::high_resolution_clock::now()
 			   - sentTimeStamps[p.seqNum]; 
 			adjustRtt(packetRtt);
 
-			// Check if packet is marked as lost.
-			if((isTimedOut.find(p.seqNum) == isTimedOut.end())
-				   	&& !(isTimedOut[p.seqNum])){
+			// Check Packet is not already lost 
+			// not in finishedWithPacket => not finished with yet 
+			// not finished with
+			if((finishedWithPacket.find(p.seqNum) == finishedWithPacket.end())
+				   	|| !(finishedWithPacket[p.seqNum])){
 
+				
 				// Adjust loss probability
 				lossProbability = lossProbability*(1-alpha);
 				
@@ -139,6 +142,7 @@ public:
 				--(theBlock->numberOfPacketsInFlight);
 				theBlock->ackedDOF 
 					= std::min(p.currentBlockDOF, theBlock->ackedDOF);
+				
 				std::cout << "p.currentBlockDOF " << p.currentBlockDOF 
 					<< " theBlock->ackedDOF = " << theBlock->ackedDOF
 					<< std::endl;
@@ -148,12 +152,14 @@ public:
 				theBlock->blockInfoMutex.unlock();	
 
 				// Adjust  lastSeqNumAcked, currentDOF
-				seqNumMux.lock();
 				lastSeqNumAckd = std::max(lastSeqNumAckd, (int)p.seqNum);
-				seqNumMux.unlock();
 
 				tokens++;
+				std::cout << std::endl << "Incremented TOKENS to " 
+					<< tokens << std::endl << std::endl;
 			}
+			
+			finishedWithPacket[p.seqNum] = true;	
 		}
 	}
 
@@ -192,38 +198,42 @@ public:
 		while(true){
 			usleep(1000); // loop every 1 millisecond 
 
-			seqNumMux.lock();
-			int seqNum = lastSeqNumAckd + 1;			
-
-			// No need to loop if we've already recieved the all acks 
-			if(seqNum >= seqNumNext){
-				seqNumMux.unlock();
-				continue;
-			}
-
-
-			auto now = std::chrono::high_resolution_clock::now();
-
 			// Loop thorough packets in flight, oldest to newest. Look for 
 			// high-delay packets and count them as lost	
 			// Note this doesn't use std deviation, which would be a better idea
+			
+			//int seqNum = lastSeqNumAckd + 1;			
+			for(int seqNum = 0; seqNum < seqNumNext; seqNum++){
 				
-			while(seqNum < seqNumNext &&
-				rttInfo.average*1.5 < (now-sentTimeStamps[seqNum])){
-				
-				seqNumMux.unlock();
-				std::cout << "Loss Detected - seqNum = " << seqNum 
-					<< " SeqNumNext = " << seqNumNext << std::endl;
+				if(finishedWithPacket.find(seqNum) == finishedWithPacket.end()
+						|| !finishedWithPacket[seqNum]){
+					auto now = std::chrono::high_resolution_clock::now();
+					std::chrono::duration<double> timeTaken = 
+						(now-sentTimeStamps[seqNum]);
 
-				adjustForLostPacket(mapSeqNumToBlockInfo[seqNum], seqNum);
-				
-				// Update the lastSeqNumAcked as if packet is acked
-				seqNumMux.lock();
-				lastSeqNumAckd++;
+					if(rttInfo.average*5 < timeTaken){
 
-				seqNum++;
+						finishedWithPacket[seqNum] = true;
+
+						std::cout << "Loss Detected - seqNum = " << seqNum 
+							<< " SeqNumNext = " << seqNumNext 
+							<< " lastSeqNumAckd " << lastSeqNumAckd
+							<< " timeTaken = " << timeTaken.count() 
+							<< " RttAverage*2 = " <<(rttInfo.average*2).count()
+							<< std::endl;
+
+						adjustForLostPacket(
+								mapSeqNumToBlockInfo[seqNum], 
+								seqNum);
+						
+					}
+
+				}else{
+					//std::cout << "Packet already marked as lost-Loss Detected" 
+					//	<< "seqNum = " << seqNum << std::endl;
+				}
+				
 			}
-			seqNumMux.unlock();
 		}
 	}
  
@@ -233,15 +243,14 @@ public:
 
 		std::cout << "adjusting for lost packet in block: ";
 		std::cout << blockLostFrom->offsetInFile << " Packets in flight ";
+		std::cout << " seqNum = " << seqNum;
 		std::cout << blockLostFrom->numberOfPacketsInFlight << std::endl;
 		std::cout << " dataSize " << blockLostFrom->data.size() << std::endl;
 
-		isTimedOut[seqNum] = false;
 
 		blockLostFrom->blockInfoMutex.lock();
-		// TODO only make sure we don't double decrement if packet does arrive 
-		// (but is late)
 		blockLostFrom->numberOfPacketsInFlight -= 1;
+
 		tokens++;
 		blockLostFrom->blockInfoMutex.unlock();
 		lossProbability = lossProbability*(1-alpha)*(1-alpha) + alpha;
@@ -250,12 +259,8 @@ public:
 
 	Packet* calculatePacketToSend(){
 		// Creates packet on heap of the correct data to send 
-		// TODO calculate which packet should be sent next and code it
-		// NOTE, should set block number to correct value
-			
 		// NOTE: Assume that the encoder is set up correctly
 		
-
 		// Iterate through block infos until we find a block in which not enough
 		// packets have been sent for the reciever to decode 
 
@@ -283,10 +288,11 @@ public:
 			   	loopedBlock->numberOfPacketsInFlight * (1-lossProbability)
 				+ loopedBlock->data.size() / PACKET_SIZE 
 				- loopedBlock->ackedDOF;
-			std::cout << "expectedArrivals = " << expectedArrivals << std::endl;
+			std::cout << "Block " << loopedBlock->offsetInFile 
+				<<" expectedArrivals = " << expectedArrivals << std::endl;
 
 			if(expectedArrivals < ((int)loopedBlock->data.size()/PACKET_SIZE)){
-
+				
 				std::cout << "Generating packet from block at offset "
 					<< loopedBlock->offsetInFile << " block Datasize = "
 				   	<< loopedBlock->data.size() << std::endl; 
@@ -319,10 +325,8 @@ public:
 			<< mapSeqNumToBlockInfo.size() << std::endl;
 	
 		// TODO decide a clearer place for this to go...		
-		seqNumMux.lock();
 		p->seqNum = seqNumNext;
 		seqNumNext++;
-		seqNumMux.unlock();
 
 		block->blockInfoMutex.lock(); // Take lock
 		
@@ -336,9 +340,15 @@ public:
 		std::cout << "dataSize = " << p->dataSize << std::endl;
 
 		// Update number of packets in flight since we're sendin a packet
-		std::cout << "Incrementing number of packets in flight...";
+		std::cout << "Incrementing number of packets in flight..." << std::endl;
 		(block->numberOfPacketsInFlight)++;
-		std::cout << " value = " << block->numberOfPacketsInFlight << std::endl;
+		//std::cout << " value = " << block->numberOfPacketsInFlight << std::endl;
+		
+		for(blockInfo* b : currentBlocksBeingSent){
+			std::cout << "\t Block " << b->offsetInFile << " has " 
+				<< b->numberOfPacketsInFlight << " packets in flight"
+				<< std::endl;
+		}
 
 		// set the packt's offset field
 		p->offsetInFile = block->offsetInFile;
@@ -347,7 +357,6 @@ public:
 		
 		return p;		
 	}
-// TODO NOTE THAT THE TIMEOUT FOR LOSSES SEEMS TO CAUSE SEG FAULTS
 
 	void adjustRtt(std::chrono::duration<double, std::micro> measurement){
 		std::chrono::duration<double> error = measurement - rttInfo.average;
@@ -378,7 +387,6 @@ public:
 		std::cout << "Got data to send, size = " 
 			<< theBlock->data.size() << std::endl;
 		std::cout << " looks like: " << theBlock->data.data() << std::endl;
-		// TODO set offset in blockInfo
 
 		// Create and encoder and accociate it with the data
 		kodocpp::encoder_factory encoder_factory(
