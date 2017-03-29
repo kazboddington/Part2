@@ -50,11 +50,13 @@ private:
 	int seqNumNext = 0; // An index of the next packet to be sent
 	int lastSeqNumAckd = 0; // The last seqence number to be acknowledged
 
-	std::atomic<int> tokens = {10}; // The number of packets availble to be sent
+	std::atomic<int> tokens = {5}; // The number of packets availble to be sent
 
 	int DOFCurrentBlock = 0; // Degrees of freedom of current block
 
   	const double alpha = 0.01; // Used for updating loss probability
+	const double beta = 0.125;
+
 	double lossProbability = 0;
 
 	typedef struct blockInfo{
@@ -71,7 +73,7 @@ private:
 	// Info for each block beingg sent by this flow
 	// Note that we delete blocks from this once they're sent
 	
-	std::vector<std::chrono::high_resolution_clock::time_point> sentTimeStamps;
+	std::vector<std::chrono::steady_clock::time_point> sentTimeStamps;
 	std::vector<blockInfo*> mapSeqNumToBlockInfo;
 	std::map<unsigned int, bool> finishedWithPacket;
 public:
@@ -115,7 +117,7 @@ public:
 				<< p.seqNum << std::endl;	
 
 			// Adjust RTT
-			auto packetRtt = std::chrono::high_resolution_clock::now()
+			auto packetRtt = std::chrono::steady_clock::now()
 			   - sentTimeStamps[p.seqNum]; 
 			adjustRtt(packetRtt);
 
@@ -174,7 +176,7 @@ public:
 
 				// Save timestamp 
 				sentTimeStamps.push_back( 
-					std::chrono::high_resolution_clock::now());
+					std::chrono::steady_clock::now());
 
 				// Send packet
 				sender.sendPacket(p);
@@ -201,38 +203,51 @@ public:
 			// Loop thorough packets in flight, oldest to newest. Look for 
 			// high-delay packets and count them as lost	
 			// Note this doesn't use std deviation, which would be a better idea
-			
-			//int seqNum = lastSeqNumAckd + 1;			
-			for(int seqNum = 0; seqNum < seqNumNext; seqNum++){
+
+			int mostRecentTimeOut = 0; 
+			// not strictly necesarry, just makes it faster
+		
+			// NOTE: seqNum-1 since otherwise we get reading memory that's not
+			// always written, although this technically isn't correct	
+			for(int seqNum = mostRecentTimeOut; seqNum < seqNumNext-1; seqNum++){
 				
 				if(finishedWithPacket.find(seqNum) == finishedWithPacket.end()
 						|| !finishedWithPacket[seqNum]){
-					auto now = std::chrono::high_resolution_clock::now();
+					auto now = std::chrono::steady_clock::now();
+					if (now < sentTimeStamps[seqNum]){
+						std::cout << "Gone Back in time..."
+							<< "SeqNum = " << seqNum << std::endl;
+						//TODO is this correct?
+						continue;
+					}
 					std::chrono::duration<double> timeTaken = 
 						(now-sentTimeStamps[seqNum]);
 
-					if(rttInfo.average*5 < timeTaken){
+					if(rttInfo.average + rttInfo.deviataion*3 < timeTaken){
 
 						finishedWithPacket[seqNum] = true;
+						mostRecentTimeOut = seqNum;
 
 						std::cout << "Loss Detected - seqNum = " << seqNum 
 							<< " SeqNumNext = " << seqNumNext 
 							<< " lastSeqNumAckd " << lastSeqNumAckd
 							<< " timeTaken = " << timeTaken.count() 
-							<< " RttAverage*2 = " <<(rttInfo.average*2).count()
+							<< " RttAverage + deviation*3 = " 
+							<< (rttInfo.average + rttInfo.deviataion*3).count()
+							<< " RTTAverage = " << rttInfo.average.count()
+							<< " RTTDeviation =" << rttInfo.deviataion.count()
+							<< " now = " << now.time_since_epoch().count()
+							<< " timestamp = " 
+							<< sentTimeStamps[seqNum].time_since_epoch().count()
 							<< std::endl;
-
+							//TODO CHECK DEVIATION
 						adjustForLostPacket(
 								mapSeqNumToBlockInfo[seqNum], 
 								seqNum);
+
 						
 					}
-
-				}else{
-					//std::cout << "Packet already marked as lost-Loss Detected" 
-					//	<< "seqNum = " << seqNum << std::endl;
 				}
-				
 			}
 		}
 	}
@@ -360,9 +375,9 @@ public:
 
 	void adjustRtt(std::chrono::duration<double, std::micro> measurement){
 		std::chrono::duration<double> error = measurement - rttInfo.average;
-		rttInfo.average = rttInfo.average + 0.125*error;
+		rttInfo.average = rttInfo.average + beta*error;
 		if(error.count() < 0) error = -error;
-		rttInfo.deviataion += 0.125*(error- rttInfo.deviataion);
+		rttInfo.deviataion += beta*(error- rttInfo.deviataion);
 		if(measurement < rttInfo.min) rttInfo.min = measurement;
 		std::cout << "RTT update: Average "
 			<< rttInfo.average.count() << " s";

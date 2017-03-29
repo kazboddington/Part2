@@ -61,7 +61,6 @@ public:
 		
 		blockInfo->data_out.resize(blockInfo->decoder.block_size());
 
-
 		blockInfo->decoder.set_mutable_symbols(
 			blockInfo->data_out.data(), blockInfo->decoder.block_size());
 
