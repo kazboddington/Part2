@@ -122,8 +122,16 @@ public:
 
 			if(theBlock->decoder.is_complete()){
 				std::cout << "DECODED ALL DATA" << std::endl;
-				printData(theBlock->data_out.data(), 50);
+				for(std::map<uint32_t, recvBlockInfo*>::iterator it
+					  	= recievedBlocksByOffset.begin();
+						it != recievedBlocksByOffset.end();
+						++it){
+					recvBlockInfo* b = (it->second);
+					std::cout << "Block decoded: " << b->offset << std::endl;
+					printData(b->data_out.data(), 50);
+				}
 			}
+
 
 			delete ack;
 		}

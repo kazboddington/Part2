@@ -29,14 +29,15 @@ private:
 	std::vector<SenderFlowManager*> subflows;
 	int numberOfBlocks = 1000;
 	std::vector<uint8_t>& dataToSend; 
-	int sentUpTo = 0;
 public:
+	int sentUpTo = 0;
 	SenderManager(std::vector<uint8_t>& dataToSend);
 	void addSubflow(SenderFlowManager *subflow);
 	int getNumberOfBlocks();
 	std::vector<SenderFlowManager *> &getSubflows();
 	// Hands over a block of data for a flow to send to the reciever of the
 	// asked for size. 
+	int getDataSize();
 	int setDataInBlock(int maxNumberOfPackets, std::vector<uint8_t>* dataToSet);
 };
 
@@ -173,24 +174,43 @@ public:
 			if(tokens != 0){ // Allowed to send
 
 				// Create packet to send, setting fields etc.
-				Packet *p = calculatePacketToSend();
-				std::cout << "Packet calculated to send" << std::endl;
+				try{
+					// Try to generate packet. Can't do so if no more data if 
+					// too many blocks in flight and all data has been alocated 
+					// to blocks
+					
+					Packet *p = calculatePacketToSend();
+					std::cout << "Packet calculated to send" << std::endl;
 
-				// Save timestamp 
-				sentTimeStamps.push_back( 
-					std::chrono::steady_clock::now());
+					// Save timestamp 
+					sentTimeStamps.push_back( 
+						std::chrono::steady_clock::now());
 
-				// Send packet
-				sender.sendPacket(p);
-				std::cout << "Packet sent, seqNum = " << p->seqNum << std::endl;
+					// Send packet
+					sender.sendPacket(p);
+					std::cout << "Packet sent, seqNum = " 
+						<< p->seqNum << std::endl;
 
-				// Reduce number of tokens since a packet is sent 
-				tokens--;
+					// Reduce number of tokens since a packet is sent 
+					tokens--;
 
-				// Clean up
-				std::cout << "deleting packet..." << std::endl;
-				delete p;
-				std::cout << "done." << std::endl;
+					// Clean up
+					std::cout << "deleting packet..." << std::endl;
+					delete p;
+					std::cout << "done." << std::endl;
+				}catch(int a){
+					if(a == 1){
+						std::cout << " No packet generated, since no more data"
+						 	<< std::endl;
+						if(currentBlocksBeingSent.back()->ackedDOF == 0){
+							std::cout << "All data sent and acked" << std::endl;
+							return;
+						}
+					}else{
+					 	std::cout << " no idea what the error was: " << a
+							<< std::endl;	
+					}
+				}
 			}
 		}
 	}
@@ -280,7 +300,7 @@ public:
 		
 		// Iterate through block infos until we find a block in which not enough
 		// packets have been sent for the reciever to decode 
-
+		
 		std::list<blockInfo*>::iterator it;
 
 		for(it = currentBlocksBeingSent.begin(); 
@@ -323,16 +343,21 @@ public:
 
 		// None of the blocks in the list need packets sending. Create a new 
 		// block and generate a packet using it.
-		currentBlocksBeingSent.push_back(calculateNewBlock());
-		blockInfo* theBlock = currentBlocksBeingSent.back();
+		
+		try{
+			currentBlocksBeingSent.push_back(calculateNewBlock());
+			blockInfo* theBlock = currentBlocksBeingSent.back();
 
-		std::cout << "Created new block, offset = " 
-			<< theBlock->offsetInFile << std::endl;
+			std::cout << "Created new block, offset = " 
+				<< theBlock->offsetInFile << std::endl;
 
-		Packet* p = generatePacketFromBlock(theBlock);
-
-		return p;
+			Packet* p = generatePacketFromBlock(theBlock);
+			return p;
+		}catch(int a){
+			throw;
+		}
 	}
+
 	Packet* generatePacketFromBlock(blockInfo* block){
 		Packet *p = new Packet();
 		
@@ -396,9 +421,14 @@ public:
 		uint32_t maxNumberOfPacketsInBlock = 250;
 
 		// Grab data from manager
-		uint32_t offset = manager.setDataInBlock(
-				maxNumberOfPacketsInBlock, 
-				&(theBlock->data));
+		uint32_t offset;
+		try{
+			offset = manager.setDataInBlock(
+					maxNumberOfPacketsInBlock, 
+					&(theBlock->data));
+		}catch(int a){
+			throw;
+		}
 
 		uint32_t numberOfPacketsInBlock = theBlock->data.size() / PACKET_SIZE;
 		std::cout << "Got data to send, size = " 
@@ -461,11 +491,13 @@ int SenderManager::setDataInBlock(
 	int amountToSend = std::min(
 			(int)(dataToSend.size() - sentUpTo),
 			(int)maxNumberOfPackets*PACKET_SIZE);
+	
 	if(amountToSend <= 0) {
-		std::cout << "ALL DATA SENT... amountToSend = " 
+		std::cout << "All data allocated " 
 			<< amountToSend << std::endl;
-		while(true);
+		throw 1;
 	}
+
 	std::cout << "Handing over " << amountToSend 
 		<< " bytes to flow" << std::endl;
 
@@ -478,6 +510,9 @@ int SenderManager::setDataInBlock(
 	return sentUpTo - amountToSend;
 }
 
+int SenderManager::getDataSize(){
+	return dataToSend.size();
+}
 
 int main(){
 	srand(time(NULL));
