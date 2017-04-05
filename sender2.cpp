@@ -27,13 +27,11 @@ class SenderFlowManager;
 class SenderManager{
 private:
 	std::vector<SenderFlowManager*> subflows;
-	int numberOfBlocks = 1000;
 	std::vector<uint8_t>& dataToSend; 
 public:
 	int sentUpTo = 0;
 	SenderManager(std::vector<uint8_t>& dataToSend);
 	void addSubflow(SenderFlowManager *subflow);
-	int getNumberOfBlocks();
 	std::vector<SenderFlowManager *> &getSubflows();
 	// Hands over a block of data for a flow to send to the reciever of the
 	// asked for size. 
@@ -58,7 +56,7 @@ private:
 	int DOFCurrentBlock = 0; // Degrees of freedom of current block
 
   	const double alpha = 0.01; // Used for updating loss probability
-	const double beta = 0.125;
+	const double beta = 0.125; // as per original TCP
 
 	double lossProbability = 0;
 
@@ -79,6 +77,8 @@ private:
 	std::vector<std::chrono::steady_clock::time_point> sentTimeStamps;
 	std::vector<blockInfo*> mapSeqNumToBlockInfo;
 	std::map<unsigned int, bool> finishedWithPacket;
+
+	bool isSlowStart = true;
 public:
 	// The four connections held by the sender module
 
@@ -165,10 +165,15 @@ public:
 				// Adjust  lastSeqNumAcked, currentDOF
 				lastSeqNumAckd = std::max(lastSeqNumAckd, (int)p.seqNum);
 
-
 				tokens++;
-				tokens += 1/tokensMax;
-				tokensMax += 1/tokensMax;
+				
+				if(isSlowStart){
+					tokens++;
+					tokensMax++;
+				}else{
+					tokens += 1/tokensMax;
+					tokensMax += 1/tokensMax;
+				}
 				std::cout << "max tokens = " << tokensMax << " rttmin/rtt = " 
 					<< rttInfo.min/rttInfo.average << std::endl;
 
@@ -261,8 +266,10 @@ public:
 					std::chrono::duration<double> timeTaken = 
 						(now-sentTimeStamps[seqNum]);
 
-					if(rttInfo.average + rttInfo.deviataion*3 < timeTaken){
-
+					// other possible method
+					
+					// if(rttInfo.average*2 + rttInfo.deviataion*4 < timeTaken){
+					if(rttInfo.average*2 < timeTaken){
 						finishedWithPacket[seqNum] = true;
 						mostRecentTimeOut = seqNum;
 
@@ -292,6 +299,7 @@ public:
 	void adjustForLostPacket(blockInfo* blockLostFrom, int seqNum){
 		// Adjust the loss probability and the RTT, as well as increment tokens
 		
+		isSlowStart = false;	
 
 		std::cout << "adjusting for lost packet in block: ";
 		std::cout << blockLostFrom->offsetInFile;
@@ -306,7 +314,7 @@ public:
 		tokens++;
 		tokens -= tokensMax*(1 - rttInfo.min/rttInfo.average);
 		std::cout << "Tokens Max reduced from : " << tokensMax;
-		tokensMax = tokensMax*(rttInfo.min/rttInfo.average);
+		tokensMax = std::max(tokensMax*(rttInfo.min/rttInfo.average), 1.0);
 		std::cout << " to " << tokensMax << std::endl;
 
 		blockLostFrom->blockInfoMutex.unlock();
@@ -416,7 +424,7 @@ public:
 		std::chrono::duration<double> error = measurement - rttInfo.average;
 		rttInfo.average = rttInfo.average + beta*error;
 		if(error.count() < 0) error = -error;
-		rttInfo.deviataion += beta*(error- rttInfo.deviataion);
+		rttInfo.deviataion += 2*beta*(error- rttInfo.deviataion);
 		if(measurement < rttInfo.min) rttInfo.min = measurement;
 		std::cout << "RTT update: Average "
 			<< rttInfo.average.count() << " s";
@@ -488,10 +496,6 @@ void SenderManager::addSubflow(SenderFlowManager *subflow){
 		<< subflows.size() << std::endl;
 }
 
-int SenderManager::getNumberOfBlocks(){
-	return numberOfBlocks;
-}
-
 std::vector<SenderFlowManager *> &SenderManager::getSubflows(){
 	return subflows;
 }
@@ -527,8 +531,9 @@ int SenderManager::getDataSize(){
 }
 
 int main(){
+	std::cout << "It has begun" << std::endl;
 	srand(time(NULL));
-	std::vector<uint8_t> dataToSend(1000*PACKET_SIZE);
+	std::vector<uint8_t> dataToSend(10000*PACKET_SIZE);
 	std::generate(dataToSend.begin(), dataToSend.end(), rand);
 	dataToSend[0] = 0; dataToSend[1] = 0; dataToSend[2] = 0;
 

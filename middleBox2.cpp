@@ -51,7 +51,7 @@ public:
 	void processingLoop(){
 		std::cout << "started processing" << std::endl;
 		while(true){
-			usleep(timeToProcessPacket);	
+			usleep(timeToProcessPacket*1000); //make it milliseconds
 			bufferMux.lock();
 			if(buffer.size() > 0){
 
