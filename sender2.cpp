@@ -51,7 +51,9 @@ private:
 	int seqNumNext = 0; // An index of the next packet to be sent
 	int lastSeqNumAckd = 0; // The last seqence number to be acknowledged
 
-	std::atomic<int> tokens = {50}; // The number of packets availble to be sent
+	// The number of packets availble to be sent
+	double tokens = 1; 
+	double tokensMax = 1;
 
 	int DOFCurrentBlock = 0; // Degrees of freedom of current block
 
@@ -120,8 +122,12 @@ public:
 			// Adjust RTT
 			auto packetRtt = std::chrono::steady_clock::now()
 			   - sentTimeStamps[p.seqNum]; 
+
 			// initialise rtt estimate
-			if (p.seqNum == 0) rttInfo.average = packetRtt;
+			if (p.seqNum == 0){
+				rttInfo.average = packetRtt;
+				rttInfo.min = packetRtt;
+			}
 			adjustRtt(packetRtt);
 
 			// Check Packet is not already lost 
@@ -159,7 +165,14 @@ public:
 				// Adjust  lastSeqNumAcked, currentDOF
 				lastSeqNumAckd = std::max(lastSeqNumAckd, (int)p.seqNum);
 
+
 				tokens++;
+				tokens += 1/tokensMax;
+				tokensMax += 1/tokensMax;
+				std::cout << "max tokens = " << tokensMax << " rttmin/rtt = " 
+					<< rttInfo.min/rttInfo.average << std::endl;
+
+
 				std::cout << std::endl << "Incremented TOKENS to " 
 					<< tokens << std::endl << std::endl;
 			}
@@ -171,7 +184,7 @@ public:
 	void sendLoop(){
 		// Naiive implementation - poll tokens, and send packet if token free
 		while(true){
-			if(tokens != 0){ // Allowed to send
+			if(tokens >= 0){ // Allowed to send
 
 				// Create packet to send, setting fields etc.
 				try{
@@ -236,12 +249,15 @@ public:
 				if(finishedWithPacket.find(seqNum) == finishedWithPacket.end()
 						|| !finishedWithPacket[seqNum]){
 					auto now = std::chrono::steady_clock::now();
+					
 					if (now < sentTimeStamps[seqNum]){
+						// Should never happen, but does if the OS 
+						// ajusts for clock skew.
 						std::cout << "Gone Back in time..."
 							<< "SeqNum = " << seqNum << std::endl;
-						//TODO is this correct?
 						continue;
 					}
+
 					std::chrono::duration<double> timeTaken = 
 						(now-sentTimeStamps[seqNum]);
 
@@ -262,11 +278,10 @@ public:
 							<< " timestamp = " 
 							<< sentTimeStamps[seqNum].time_since_epoch().count()
 							<< std::endl;
-							//TODO CHECK DEVIATION
+						
 						adjustForLostPacket(
 								mapSeqNumToBlockInfo[seqNum], 
 								seqNum);
-
 						
 					}
 				}
@@ -279,7 +294,7 @@ public:
 		
 
 		std::cout << "adjusting for lost packet in block: ";
-		std::cout << blockLostFrom->offsetInFile << " Packets in flight ";
+		std::cout << blockLostFrom->offsetInFile;
 		std::cout << " seqNum = " << seqNum;
 		std::cout << blockLostFrom->numberOfPacketsInFlight << std::endl;
 		std::cout << " dataSize " << blockLostFrom->data.size() << std::endl;
@@ -289,6 +304,11 @@ public:
 		blockLostFrom->numberOfPacketsInFlight -= 1;
 
 		tokens++;
+		tokens -= tokensMax*(1 - rttInfo.min/rttInfo.average);
+		std::cout << "Tokens Max reduced from : " << tokensMax;
+		tokensMax = tokensMax*(rttInfo.min/rttInfo.average);
+		std::cout << " to " << tokensMax << std::endl;
+
 		blockLostFrom->blockInfoMutex.unlock();
 		lossProbability = lossProbability*(1-alpha)*(1-alpha) + alpha;
 		std::cout << "Loss lossProbability = " << lossProbability << std::endl;
@@ -312,14 +332,6 @@ public:
 			   << loopedBlock->offsetInFile << std::endl;
 			
 			loopedBlock->blockInfoMutex.lock();
-
-			std::cout << "Mutex aquired" << std::endl
-				<< "Number of packets in flight: "
-				<< loopedBlock->numberOfPacketsInFlight
-				<< ", lossProbability = " << lossProbability
-			   	<< ", DOF for this block: " << loopedBlock->ackedDOF
-				<< std::endl;
-
 
 			int expectedArrivals =
 			   	loopedBlock->numberOfPacketsInFlight * (1-lossProbability)
@@ -538,18 +550,18 @@ int main(){
 	std::thread flow1LossDetectThread(
 			&SenderFlowManager::checkForLosses, &flow1);
 
-	std::thread flow2SendThread(
-		&SenderFlowManager::sendLoop, &flow2);
-	std::thread flow2RecieveThread(
-		&SenderFlowManager::recieveAndProcessAcks, &flow2);
-	std::thread flow2LossDetectThread(
-			&SenderFlowManager::checkForLosses, &flow2);
+//	std::thread flow2SendThread(
+//		&SenderFlowManager::sendLoop, &flow2);
+//	std::thread flow2RecieveThread(
+//		&SenderFlowManager::recieveAndProcessAcks, &flow2);
+//	std::thread flow2LossDetectThread(
+//			&SenderFlowManager::checkForLosses, &flow2);
 
 
 	flow1SendThread.join();
 	flow1RecieveThread.join();
 
-	flow2SendThread.join();
-	flow2RecieveThread.join();
+//	flow2SendThread.join();
+//	flow2RecieveThread.join();
 }
 
