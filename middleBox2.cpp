@@ -101,16 +101,15 @@ int main(int argc, char* argv[]){
 	
 	char* sourcePort = argv[1];
 	char* destinationPort = argv[2];
-	int bufferSize = 100;
 	//char* lossProbability = argv[3];
-	char* linkDelay = argv[5];
 	char* processingDelay = argv[4]; // in ms
-
+	char* linkDelay = argv[5];
+	char* bufferSize = argv[6];
 
 	MiddleBox box1(
 			atoi(sourcePort), 
 			destinationPort, 
-			bufferSize, 
+			atoi(bufferSize), 
 			atoi(linkDelay),
 			atoi(processingDelay));
 	

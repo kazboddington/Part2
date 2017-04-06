@@ -79,6 +79,8 @@ private:
 	std::map<unsigned int, bool> finishedWithPacket;
 
 	bool isSlowStart = true;
+	std::chrono::steady_clock::time_point tokenReducedTimestamp;
+
 public:
 	// The four connections held by the sender module
 
@@ -165,8 +167,10 @@ public:
 				// Adjust  lastSeqNumAcked, currentDOF
 				lastSeqNumAckd = std::max(lastSeqNumAckd, (int)p.seqNum);
 
+				// Free up token since got ack
 				tokens++;
 				
+				// Adjust window(tokens) appropriately
 				if(isSlowStart){
 					tokens++;
 					tokensMax++;
@@ -174,6 +178,7 @@ public:
 					tokens += 1/tokensMax;
 					tokensMax += 1/tokensMax;
 				}
+
 				std::cout << "max tokens = " << tokensMax << " rttmin/rtt = " 
 					<< rttInfo.min/rttInfo.average << std::endl;
 
@@ -312,10 +317,17 @@ public:
 		blockLostFrom->numberOfPacketsInFlight -= 1;
 
 		tokens++;
-		tokens -= tokensMax*(1 - rttInfo.min/rttInfo.average);
-		std::cout << "Tokens Max reduced from : " << tokensMax;
-		tokensMax = std::max(tokensMax*(rttInfo.min/rttInfo.average), 1.0);
-		std::cout << " to " << tokensMax << std::endl;
+
+		auto now = std::chrono::steady_clock::now();
+		if((now - tokenReducedTimestamp) > rttInfo.average){
+			tokenReducedTimestamp = now;
+			tokens -= tokensMax*(1 - rttInfo.min/rttInfo.average);
+
+			std::cout << "Tokens Max reduced from : " << tokensMax;
+			tokensMax = std::max(tokensMax*(rttInfo.min/rttInfo.average), 1.0);
+			std::cout << " to " << tokensMax << std::endl;
+		}
+
 
 		blockLostFrom->blockInfoMutex.unlock();
 		lossProbability = lossProbability*(1-alpha)*(1-alpha) + alpha;
