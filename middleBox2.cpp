@@ -76,6 +76,7 @@ public:
 		std::cout << "Started recieving" << std::endl;
 		while(true){
 			Packet p = reciever.listenOnce();
+			std::cout << "packet recieved..." << std::endl;
 			bufferMux.lock();
 			if((int)buffer.size() >= maxBufferSize){
 				std::cout << "Dropping packet since buffer is full"

@@ -6,6 +6,8 @@
 #include <kodocpp/kodocpp.hpp>
 #include <map>
 #include <algorithm>
+#include <unistd.h>
+#include <fstream>
 
 #include "PacketReciever.h"
 #include "PacketSender.h"
@@ -36,9 +38,16 @@ private:
 	}recvBlockInfo;
 
 	std::map<uint32_t, recvBlockInfo*> recievedBlocksByOffset;
-
+	
 public:
 
+
+	// FOR EVALUATION
+	//
+	int usefulPacketsRecvd = 0;	
+	//
+	//END 
+	
 	RecieverManager(const char sourcePort[], const char destinationPort[]):
 		reciever(atoi(sourcePort)),
 		sender("127.0.0.1", destinationPort){
@@ -68,6 +77,28 @@ public:
 		return blockInfo;
 	}
 
+
+	void printer(std::string fileName, int* value){
+		std::ofstream myFile;
+		myFile.open(fileName);
+		int x = 0;
+		auto startTime = std::chrono::steady_clock::now();	
+		while(true){
+			auto now = std::chrono::steady_clock::now();	
+			auto delta = now - startTime;
+			if(delta < std::chrono::duration<double>(20)){
+				usleep(10000);	
+				myFile 
+					<< std::chrono::duration<double, std::milli>(delta).count()
+					<< "\t" << *value << "\n";
+				x++;
+			}else{
+				break;
+			}
+		}	
+		myFile.close();
+	}
+
 	
 
 	void recievePackets(){
@@ -77,7 +108,7 @@ public:
 		// (2) first un-decoded block number
 		// (3) the number of degrees of freedom in the first block number
 		
-		uint32_t blockSize = 250;
+		uint32_t blockSize = 20;
 
 		while (true){
 			Packet p = reciever.listenOnce();
@@ -106,7 +137,11 @@ public:
 
 			// Decrement DOF for this block
 			--(theBlock->DOF);
-			theBlock->DOF = std::max((int)theBlock->DOF, 0);
+			if((int)theBlock->DOF < 0){
+				theBlock->DOF = 0;
+			}else{
+				usefulPacketsRecvd++;
+			}
 			std::cout << "DOF = " << theBlock->DOF << std::endl;
 	
 			
@@ -115,21 +150,19 @@ public:
 
 			ack->currentBlockDOF = theBlock->DOF;
 			ack->seqNum = p.seqNum;
-
-			// TODO set DOF and current block
 				
 			sender.sendPacket(ack);
 
 			if(theBlock->decoder.is_complete()){
 				std::cout << "DECODED ALL DATA" << std::endl;
-				for(std::map<uint32_t, recvBlockInfo*>::iterator it
-					  	= recievedBlocksByOffset.begin();
-						it != recievedBlocksByOffset.end();
-						++it){
-					recvBlockInfo* b = (it->second);
-					std::cout << "Block decoded: " << b->offset << std::endl;
-					printData(b->data_out.data(), 50);
-				}
+			//	for(std::map<uint32_t, recvBlockInfo*>::iterator it
+			//		  	= recievedBlocksByOffset.begin();
+			//			it != recievedBlocksByOffset.end();
+			//			++it){
+			//		recvBlockInfo* b = (it->second);
+			//		std::cout << "Block decoded: " << b->offset << std::endl;
+			//		printData(b->data_out.data(), 50);
+			//	}
 			}
 
 
@@ -143,7 +176,11 @@ int main(){
 	RecieverManager flow1(FLOW1_SOURCE, FLOW1_DEST);
 	RecieverManager flow2(FLOW2_SOURCE, FLOW2_DEST);
 	std::thread flow1Thread(&RecieverManager::recievePackets, std::ref(flow1));
-	std::thread flow2Thread(&RecieverManager::recievePackets, std::ref(flow2));
+	std::thread flow2Thread(&RecieverManager::recievePackets, std::ref(flow2));	
+	std::thread printerThread(&RecieverManager::printer,
+			&flow1, 
+			"flow1totalPacketsRecv.cvv", 
+			&(flow1.usefulPacketsRecvd));
 
 	flow1Thread.join();
 	flow2Thread.join();

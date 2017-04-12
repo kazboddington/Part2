@@ -8,6 +8,7 @@
 #include <mutex>
 #include <map>
 #include <atomic>
+#include <fstream>
 
 #include <kodocpp/kodocpp.hpp>
 #include "netcode/decoder.hh"
@@ -15,10 +16,11 @@
 #include "PacketReciever.h"
 
 #define FLOW1_DEST "4000"
-#define FLOW2_DEST "5000"
+#define FLOW2_DEST "5001"
 #define FLOW1_SOURCE "2000"
 #define FLOW2_SOURCE "3000"
 #define PACKET_SIZE 1024
+
 
 // Forward declarations
 class SenderFlowManager;
@@ -50,24 +52,23 @@ private:
 	int lastSeqNumAckd = 0; // The last seqence number to be acknowledged
 
 	// The number of packets availble to be sent
-	double tokens = 1; 
-	double tokensMax = 1;
-
-	int DOFCurrentBlock = 0; // Degrees of freedom of current block
+	std::mutex tokensMux;
+	volatile double tokens = 1; 
+	volatile double tokensMax = 1;
 
   	const double alpha = 0.01; // Used for updating loss probability
 	const double beta = 0.125; // as per original TCP
 
-	double lossProbability = 0;
+	std::mutex lossProbMux;
+	volatile double lossProbability = 0;
 
 	typedef struct blockInfo{
 		std::mutex blockInfoMutex; // Must Lock this before acccessing info
 		std::vector<uint8_t> data; // Data being sent, controlled by encoder
 		uint32_t offsetInFile; // Where in the original file this data is from
 		kodocpp::encoder encoder;
-		uint32_t ackedDOF;
-
-		uint32_t numberOfPacketsInFlight; 
+		volatile uint32_t ackedDOF;
+		volatile uint32_t numberOfPacketsInFlight; 
 	}blockInfo;
 
 	std::list<blockInfo*> currentBlocksBeingSent; 
@@ -78,7 +79,7 @@ private:
 	std::vector<blockInfo*> mapSeqNumToBlockInfo;
 	std::map<unsigned int, bool> finishedWithPacket;
 
-	bool isSlowStart = true;
+	volatile bool isSlowStart = true;
 	std::chrono::steady_clock::time_point tokenReducedTimestamp;
 
 public:
@@ -110,6 +111,27 @@ public:
 			<< destinationPort << std::endl;
 	}
 
+	void tokensMaxThreadPrinter(std::string fileName){
+		std::ofstream myFile;
+		myFile.open(fileName);
+		int x = 0;
+		auto startTime = std::chrono::steady_clock::now();	
+		while(true){
+			auto now = std::chrono::steady_clock::now();	
+			auto delta = now - startTime;
+			if(delta < std::chrono::duration<double>(20)){
+				usleep(10000);	
+				myFile 
+					<< std::chrono::duration<double, std::milli>(delta).count()
+					<< "\t" << tokensMax << "\n";
+				x++;
+			}else{
+				break;
+			}
+		}	
+		myFile.close();
+	}
+
 	void recieveAndProcessAcks(){
 		// Do three things here 
 		// (1) Update RTT
@@ -128,6 +150,7 @@ public:
 			// initialise rtt estimate
 			if (p.seqNum == 0){
 				rttInfo.average = packetRtt;
+				rttInfo.deviataion = packetRtt/4; 
 				rttInfo.min = packetRtt;
 			}
 			adjustRtt(packetRtt);
@@ -140,8 +163,12 @@ public:
 
 				
 				// Adjust loss probability
+				lossProbMux.lock();
 				lossProbability = lossProbability*(1-alpha);
-				
+				std::cout << "lossProbability = " << lossProbability
+					<< std::endl;
+				lossProbMux.unlock();
+
 				blockInfo* theBlock = mapSeqNumToBlockInfo[p.seqNum];
 
 				theBlock->blockInfoMutex.lock();
@@ -154,7 +181,7 @@ public:
 
 				--(theBlock->numberOfPacketsInFlight);
 				theBlock->ackedDOF 
-					= std::min(p.currentBlockDOF, theBlock->ackedDOF);
+					= std::min(p.currentBlockDOF, (uint32_t)theBlock->ackedDOF);
 				
 				std::cout << "p.currentBlockDOF " << p.currentBlockDOF 
 					<< " theBlock->ackedDOF = " << theBlock->ackedDOF
@@ -168,6 +195,7 @@ public:
 				lastSeqNumAckd = std::max(lastSeqNumAckd, (int)p.seqNum);
 
 				// Free up token since got ack
+				tokensMux.lock();
 				tokens++;
 				
 				// Adjust window(tokens) appropriately
@@ -175,16 +203,19 @@ public:
 					tokens++;
 					tokensMax++;
 				}else{
-					tokens += 1/tokensMax;
-					tokensMax += 1/tokensMax;
+					//tokens += 1/tokensMax;
+					//tokensMax += 1/tokensMax;
+					
+					tokens += (1/tokensMax)*(1 - (rttInfo.average-rttInfo.min)/rttInfo.min);
+					tokensMax += (1/tokensMax)*(1 - (rttInfo.average-rttInfo.min)/rttInfo.min);
 				}
-
 				std::cout << "max tokens = " << tokensMax << " rttmin/rtt = " 
-					<< rttInfo.min/rttInfo.average << std::endl;
-
-
+					<< rttInfo.min/rttInfo.average << " tokens = " << tokens 
+					<< std::endl;
 				std::cout << std::endl << "Incremented TOKENS to " 
 					<< tokens << std::endl << std::endl;
+
+				tokensMux.unlock();
 			}
 			
 			finishedWithPacket[p.seqNum] = true;	
@@ -194,14 +225,16 @@ public:
 	void sendLoop(){
 		// Naiive implementation - poll tokens, and send packet if token free
 		while(true){
+			tokensMux.lock();
 			if(tokens >= 0){ // Allowed to send
-
+				tokensMux.unlock();
 				// Create packet to send, setting fields etc.
 				try{
 					// Try to generate packet. Can't do so if no more data if 
 					// too many blocks in flight and all data has been alocated 
 					// to blocks
 					
+
 					Packet *p = calculatePacketToSend();
 					std::cout << "Packet calculated to send" << std::endl;
 
@@ -210,12 +243,15 @@ public:
 						std::chrono::steady_clock::now());
 
 					// Send packet
+					std::cout << " packet dataSize = " << p->dataSize << std::endl;
 					sender.sendPacket(p);
 					std::cout << "Packet sent, seqNum = " 
 						<< p->seqNum << std::endl;
 
 					// Reduce number of tokens since a packet is sent 
+					tokensMux.lock();
 					tokens--;
+					tokensMux.unlock();
 
 					// Clean up
 					std::cout << "deleting packet..." << std::endl;
@@ -234,7 +270,10 @@ public:
 							<< std::endl;	
 					}
 				}
+			}else{
+				tokensMux.unlock();
 			}
+			
 		}
 	}
 
@@ -273,7 +312,7 @@ public:
 
 					// other possible method
 					
-					// if(rttInfo.average*2 + rttInfo.deviataion*4 < timeTaken){
+					//if(rttInfo.average + rttInfo.deviataion*4 < timeTaken){
 					if(rttInfo.average*2 < timeTaken){
 						finishedWithPacket[seqNum] = true;
 						mostRecentTimeOut = seqNum;
@@ -316,22 +355,33 @@ public:
 		blockLostFrom->blockInfoMutex.lock();
 		blockLostFrom->numberOfPacketsInFlight -= 1;
 
+		tokensMux.lock();
 		tokens++;
+		tokensMux.unlock();
 
 		auto now = std::chrono::steady_clock::now();
 		if((now - tokenReducedTimestamp) > rttInfo.average){
 			tokenReducedTimestamp = now;
-			tokens -= tokensMax*(1 - rttInfo.min/rttInfo.average);
+			
+			tokensMux.lock();
 
+			tokens -= tokensMax*(1 - rttInfo.min/rttInfo.average);
 			std::cout << "Tokens Max reduced from : " << tokensMax;
-			tokensMax = std::max(tokensMax*(rttInfo.min/rttInfo.average), 1.0);
+			tokensMax = std::max(tokensMax*(rttInfo.min/rttInfo.average), 0.0);
+			
 			std::cout << " to " << tokensMax << std::endl;
+
+			tokensMux.unlock();
 		}
 
 
 		blockLostFrom->blockInfoMutex.unlock();
+
+		lossProbMux.lock();
+		std::cout << "lossProbability was "	<< lossProbability << " now: " ;
 		lossProbability = lossProbability*(1-alpha)*(1-alpha) + alpha;
-		std::cout << "Loss lossProbability = " << lossProbability << std::endl;
+		std::cout << "\tlossProbability = " << lossProbability << std::endl;
+		lossProbMux.unlock();
 	}
 
 	Packet* calculatePacketToSend(){
@@ -413,15 +463,16 @@ public:
 		p->dataSize = bytesUsed;
 		std::cout << "dataSize = " << p->dataSize << std::endl;
 
-		// Update number of packets in flight since we're sendin a packet
+		// Update number of packets in flight since we're sending a packet
 		std::cout << "Incrementing number of packets in flight..." << std::endl;
 		(block->numberOfPacketsInFlight)++;
-		//std::cout << " value = " << block->numberOfPacketsInFlight << std::endl;
 		
 		for(blockInfo* b : currentBlocksBeingSent){
+			if(b->numberOfPacketsInFlight > 0){
 			std::cout << "\t Block " << b->offsetInFile << " has " 
 				<< b->numberOfPacketsInFlight << " packets in flight"
 				<< std::endl;
+			}
 		}
 
 		// set the packt's offset field
@@ -450,7 +501,7 @@ public:
 		blockInfo* theBlock = new blockInfo();
 
 		// Temporarily fixed length blocks
-		uint32_t maxNumberOfPacketsInBlock = 250;
+		uint32_t maxNumberOfPacketsInBlock = 20;
 
 		// Grab data from manager
 		uint32_t offset;
@@ -560,6 +611,10 @@ int main(){
 	std::cout << "manager subflows size" << manager.getSubflows().size() 
 		<< std::endl;
 
+	std::thread maxTokensOutputThread(
+			&SenderFlowManager::tokensMaxThreadPrinter,
+			&flow1,
+			"tokensMaxOutPut.cvv");
 	std::thread flow1SendThread(
 		&SenderFlowManager::sendLoop, &flow1);
 	std::thread flow1RecieveThread(
@@ -575,6 +630,7 @@ int main(){
 //			&SenderFlowManager::checkForLosses, &flow2);
 
 
+	maxTokensOutputThread.join();
 	flow1SendThread.join();
 	flow1RecieveThread.join();
 
