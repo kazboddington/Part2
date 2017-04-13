@@ -114,17 +114,19 @@ public:
 	void tokensMaxThreadPrinter(std::string fileName){
 		std::ofstream myFile;
 		myFile.open(fileName);
-		int x = 0;
 		auto startTime = std::chrono::steady_clock::now();	
 		while(true){
 			auto now = std::chrono::steady_clock::now();	
 			auto delta = now - startTime;
 			if(delta < std::chrono::duration<double>(20)){
 				usleep(10000);	
-				myFile 
-					<< std::chrono::duration<double, std::milli>(delta).count()
+				volatile double rtt =
+				   	(std::chrono::duration<double, std::milli>(rttInfo.average)
+					 .count());
+					
+				myFile <<
+				   	std::chrono::duration<double, std::milli>(delta).count()
 					<< "\t" << tokensMax << "\n";
-				x++;
 			}else{
 				break;
 			}
@@ -194,21 +196,21 @@ public:
 				// Adjust  lastSeqNumAcked, currentDOF
 				lastSeqNumAckd = std::max(lastSeqNumAckd, (int)p.seqNum);
 
-				// Free up token since got ack
 				tokensMux.lock();
-				tokens++;
-				
 				// Adjust window(tokens) appropriately
 				if(isSlowStart){
-					tokens++;
-					tokensMax++;
+					tokens += 0.5;
+					tokensMax += 0.5;
 				}else{
-					//tokens += 1/tokensMax;
-					//tokensMax += 1/tokensMax;
 					
-					tokens += (1/tokensMax)*(1 - (rttInfo.average-rttInfo.min)/rttInfo.min);
-					tokensMax += (1/tokensMax)*(1 - (rttInfo.average-rttInfo.min)/rttInfo.min);
+					tokens += (1/tokensMax)*
+						(1 - (rttInfo.average-rttInfo.min)/rttInfo.min);
+					tokensMax += (1/tokensMax)*
+						(1 - (rttInfo.average-rttInfo.min)/rttInfo.min);
 				}
+				
+				// Free up token since got ack
+				tokens++;
 				std::cout << "max tokens = " << tokensMax << " rttmin/rtt = " 
 					<< rttInfo.min/rttInfo.average << " tokens = " << tokens 
 					<< std::endl;
@@ -312,8 +314,8 @@ public:
 
 					// other possible method
 					
-					//if(rttInfo.average + rttInfo.deviataion*4 < timeTaken){
-					if(rttInfo.average*2 < timeTaken){
+					if(rttInfo.average + rttInfo.deviataion*4 < timeTaken){
+					//if(rttInfo.average*2 < timeTaken){
 						finishedWithPacket[seqNum] = true;
 						mostRecentTimeOut = seqNum;
 
@@ -343,7 +345,6 @@ public:
 	void adjustForLostPacket(blockInfo* blockLostFrom, int seqNum){
 		// Adjust the loss probability and the RTT, as well as increment tokens
 		
-		isSlowStart = false;	
 
 		std::cout << "adjusting for lost packet in block: ";
 		std::cout << blockLostFrom->offsetInFile;
@@ -355,6 +356,7 @@ public:
 		blockLostFrom->blockInfoMutex.lock();
 		blockLostFrom->numberOfPacketsInFlight -= 1;
 
+		// adjust congeston control
 		tokensMux.lock();
 		tokens++;
 		tokensMux.unlock();
@@ -363,17 +365,19 @@ public:
 		if((now - tokenReducedTimestamp) > rttInfo.average){
 			tokenReducedTimestamp = now;
 			
-			tokensMux.lock();
-
-			tokens -= tokensMax*(1 - rttInfo.min/rttInfo.average);
-			std::cout << "Tokens Max reduced from : " << tokensMax;
-			tokensMax = std::max(tokensMax*(rttInfo.min/rttInfo.average), 0.0);
-			
+			if(isSlowStart){
+				tokensMux.lock();
+				tokens -= tokensMax*(1 - rttInfo.min/rttInfo.average);
+				std::cout << "Tokens Max reduced from : " << tokensMax;
+				tokensMax -= tokensMax*(1 - rttInfo.min/rttInfo.average);
+			}
 			std::cout << " to " << tokensMax << std::endl;
 
 			tokensMux.unlock();
 		}
 
+
+		isSlowStart = false;	
 
 		blockLostFrom->blockInfoMutex.unlock();
 
@@ -501,7 +505,7 @@ public:
 		blockInfo* theBlock = new blockInfo();
 
 		// Temporarily fixed length blocks
-		uint32_t maxNumberOfPacketsInBlock = 20;
+		uint32_t maxNumberOfPacketsInBlock = 10;
 
 		// Grab data from manager
 		uint32_t offset;

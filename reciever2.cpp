@@ -78,19 +78,23 @@ public:
 	}
 
 
-	void printer(std::string fileName, int* value){
+	void printer(std::string fileName, int* value, bool cumulative){
 		std::ofstream myFile;
 		myFile.open(fileName);
 		int x = 0;
 		auto startTime = std::chrono::steady_clock::now();	
 		while(true){
 			auto now = std::chrono::steady_clock::now();	
-			auto delta = now - startTime;
-			if(delta < std::chrono::duration<double>(20)){
+			std::chrono::duration<double, std::milli> delta = now - startTime;
+			if(delta < std::chrono::duration<double>(30)){
 				usleep(10000);	
-				myFile 
-					<< std::chrono::duration<double, std::milli>(delta).count()
-					<< "\t" << *value << "\n";
+				myFile << delta.count();
+				if(cumulative){
+					myFile << "\t" << *value << "\n";
+				}else{
+					myFile << "\t" << (*value)/delta.count() << "\n";
+				}
+
 				x++;
 			}else{
 				break;
@@ -108,7 +112,7 @@ public:
 		// (2) first un-decoded block number
 		// (3) the number of degrees of freedom in the first block number
 		
-		uint32_t blockSize = 20;
+		uint32_t blockSize = 10;
 
 		while (true){
 			Packet p = reciever.listenOnce();
@@ -139,6 +143,7 @@ public:
 			--(theBlock->DOF);
 			if((int)theBlock->DOF < 0){
 				theBlock->DOF = 0;
+				std::cout << "redundant data recieved" << std::endl;
 			}else{
 				usefulPacketsRecvd++;
 			}
@@ -180,7 +185,9 @@ int main(){
 	std::thread printerThread(&RecieverManager::printer,
 			&flow1, 
 			"flow1totalPacketsRecv.cvv", 
-			&(flow1.usefulPacketsRecvd));
+			&(flow1.usefulPacketsRecvd),
+			false);
+	
 
 	flow1Thread.join();
 	flow2Thread.join();

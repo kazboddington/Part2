@@ -16,6 +16,7 @@ class MiddleBox{
 	PacketReciever reciever;
 	PacketSender sender;
 	std::mutex bufferMux;
+	float lossProb;
 	std::list<Packet> buffer;
 	int maxBufferSize;
 	TimerManager timerManager;
@@ -26,11 +27,13 @@ public:
 	MiddleBox(
 			int sourcePort, 
 			char*  destinationPort,
+			float lossProbability,
 		   	int bufferSize,
 			int outputDelay,
 			int packetProcessTime):
 		reciever(sourcePort),
 		sender("127.0.0.1", destinationPort),
+		lossProb(lossProbability),
 		maxBufferSize(bufferSize),
 		packetDelay(outputDelay),
 		timeToProcessPacket(packetProcessTime),
@@ -77,14 +80,21 @@ public:
 		while(true){
 			Packet p = reciever.listenOnce();
 			std::cout << "packet recieved..." << std::endl;
-			bufferMux.lock();
-			if((int)buffer.size() >= maxBufferSize){
-				std::cout << "Dropping packet since buffer is full"
-					<< std::endl;
+
+			if(lossProb == 0 || rand() % (int)(1/lossProb) != 0){
+				bufferMux.lock();
+
+				if((int)buffer.size() >= maxBufferSize){
+					std::cout << "Dropping packet since buffer is full"
+						<< std::endl;
+				}else{
+					buffer.push_back(p);
+				}
+
+				bufferMux.unlock();
 			}else{
-				buffer.push_back(p);
+				std::cout << "Packet lose due to random loss" << std::endl;
 			}
-			bufferMux.unlock();
 		}
 	}
 
@@ -92,6 +102,8 @@ public:
 
 
 int main(int argc, char* argv[]){
+
+	srand(time(NULL));
 
 	if (argc != 7){
 		std::cout << "Usage middlebox [IN_PORT] [OUT_PORT] "
@@ -102,7 +114,7 @@ int main(int argc, char* argv[]){
 	
 	char* sourcePort = argv[1];
 	char* destinationPort = argv[2];
-	//char* lossProbability = argv[3];
+	char* lossProbability = argv[3];
 	char* processingDelay = argv[4]; // in ms
 	char* linkDelay = argv[5];
 	char* bufferSize = argv[6];
@@ -110,6 +122,7 @@ int main(int argc, char* argv[]){
 	MiddleBox box1(
 			atoi(sourcePort), 
 			destinationPort, 
+			atof(lossProbability),
 			atoi(bufferSize), 
 			atoi(linkDelay),
 			atoi(processingDelay));
