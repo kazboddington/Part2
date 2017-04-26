@@ -63,7 +63,7 @@ public:
 				timerManager.addTask(packetDelay, resendPacket);
 
 				std::cout << "Packet sent, seqNum = " << buffer.front().seqNum
-					<< " " << buffer.size() << "/" << maxBufferSize 
+					<< " " << buffer.size()-1 << "/" << maxBufferSize 
 					<< "Packets in buffer" << std::endl;
 
 				buffer.pop_front();

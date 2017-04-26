@@ -14,8 +14,13 @@
 
 #define FLOW1_SOURCE "8000"
 #define FLOW1_DEST "7000"
+
 #define FLOW2_SOURCE "9000"
 #define FLOW2_DEST "6000"
+
+#define FLOW3_SOURCE "2004"
+#define FLOW3_DEST "2003"
+
 #define PACKET_SIZE 1024
 
 void printData(uint8_t data[], int length){
@@ -45,6 +50,7 @@ public:
 	// FOR EVALUATION
 	//
 	int usefulPacketsRecvd = 0;	
+	int redundantPakcetsRecvd = 0;
 	//
 	//END 
 	
@@ -57,7 +63,7 @@ public:
 	recvBlockInfo* createInfoBlock(uint32_t blockSize, uint32_t offset){
 
 		kodocpp::decoder_factory decoder_factory(
-			kodocpp::codec::full_vector,
+			kodocpp::codec::reed_solomon,
 			kodocpp::field::binary8,
 			blockSize,
 			PACKET_SIZE);
@@ -116,6 +122,12 @@ public:
 
 		while (true){
 			Packet p = reciever.listenOnce();
+			// For assessent
+			static std::chrono::steady_clock::time_point startTime;
+			if(p.seqNum == 1){
+				startTime = std::chrono::steady_clock::now();
+			}
+
 			std::cout << "Recieved packet SeqNum = " << p.seqNum
 				<< " Data size = " << p.dataSize << std::endl;
 
@@ -127,7 +139,7 @@ public:
 
 				recvBlockInfo* newBlock
 				   	= createInfoBlock(blockSize, p.offsetInFile);
-				
+
 				std::cout << "Adding block to map" << std::endl;
 				recievedBlocksByOffset.insert({p.offsetInFile, newBlock});
 			}
@@ -143,12 +155,24 @@ public:
 			--(theBlock->DOF);
 			if((int)theBlock->DOF < 0){
 				theBlock->DOF = 0;
-				std::cout << "redundant data recieved" << std::endl;
+				redundantPakcetsRecvd++;
+				std::cout << "redundant data recieved, total = " 
+					<< redundantPakcetsRecvd << std::endl;
+				
+				// have recieved enough packets but due to the magic of RLNC 
+				// it has not been decoded :(
+
+				static int numberOfBadCodes = 0; 
+				if(!(theBlock->decoder.is_complete())){
+					numberOfBadCodes++;
+					std::cout << "OH NO -- BAD CODES! total = "
+					   << numberOfBadCodes << std::endl;
+					(theBlock->DOF)++;
+				}
 			}else{
 				usefulPacketsRecvd++;
 			}
 			std::cout << "DOF = " << theBlock->DOF << std::endl;
-	
 			
 			// create new packet and set fields 
 			Packet* ack = new Packet();
@@ -159,15 +183,12 @@ public:
 			sender.sendPacket(ack);
 
 			if(theBlock->decoder.is_complete()){
-				std::cout << "DECODED ALL DATA" << std::endl;
-			//	for(std::map<uint32_t, recvBlockInfo*>::iterator it
-			//		  	= recievedBlocksByOffset.begin();
-			//			it != recievedBlocksByOffset.end();
-			//			++it){
-			//		recvBlockInfo* b = (it->second);
-			//		std::cout << "Block decoded: " << b->offset << std::endl;
-			//		printData(b->data_out.data(), 50);
-			//	}
+				std::chrono::duration<double> duration 
+					= std::chrono::steady_clock::now() - startTime;
+				std::cout << "DECODED ALL DATA, blockNo = " << theBlock->offset
+					<< std::endl << "Finish time = " << duration.count() << 
+					std::endl;
+
 			}
 
 
@@ -180,17 +201,21 @@ public:
 int main(){
 	RecieverManager flow1(FLOW1_SOURCE, FLOW1_DEST);
 	RecieverManager flow2(FLOW2_SOURCE, FLOW2_DEST);
+	RecieverManager flow3(FLOW3_SOURCE, FLOW3_DEST);
+
 	std::thread flow1Thread(&RecieverManager::recievePackets, std::ref(flow1));
 	std::thread flow2Thread(&RecieverManager::recievePackets, std::ref(flow2));	
+	std::thread flow3Thread(&RecieverManager::recievePackets, std::ref(flow3));	
+
 	std::thread printerThread(&RecieverManager::printer,
 			&flow1, 
 			"flow1totalPacketsRecv.cvv", 
 			&(flow1.usefulPacketsRecvd),
 			false);
-	
 
 	flow1Thread.join();
 	flow2Thread.join();
+	flow3Thread.join();
 
 	return 0;
 }

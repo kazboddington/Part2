@@ -1,3 +1,4 @@
+
 #include <iostream>
 #include <chrono>
 #include <vector>
@@ -17,8 +18,11 @@
 
 #define FLOW1_DEST "4000"
 #define FLOW2_DEST "5001"
+#define FLOW3_DEST "2002"
 #define FLOW1_SOURCE "2000"
 #define FLOW2_SOURCE "3000"
+#define FLOW3_SOURCE "2001"
+
 #define PACKET_SIZE 1024
 
 
@@ -120,12 +124,9 @@ public:
 			auto delta = now - startTime;
 			if(delta < std::chrono::duration<double>(20)){
 				usleep(10000);	
-				volatile double rtt =
-				   	(std::chrono::duration<double, std::milli>(rttInfo.average)
-					 .count());
 					
 				myFile <<
-				   	std::chrono::duration<double, std::milli>(delta).count()
+				   	std::chrono::duration<double>(delta).count()
 					<< "\t" << tokensMax << "\n";
 			}else{
 				break;
@@ -204,9 +205,9 @@ public:
 				}else{
 					
 					tokens += (1/tokensMax)*
-						(1 - (rttInfo.average-rttInfo.min)/rttInfo.min);
+						(0.25 - (rttInfo.average-rttInfo.min)/rttInfo.min);
 					tokensMax += (1/tokensMax)*
-						(1 - (rttInfo.average-rttInfo.min)/rttInfo.min);
+						(0.25 - (rttInfo.average-rttInfo.min)/rttInfo.min);
 				}
 				
 				// Free up token since got ack
@@ -361,23 +362,23 @@ public:
 		tokens++;
 		tokensMux.unlock();
 
+		//
+		// Adjust for losses not in slow start mode, (only every 1RTT)
+		//
 		auto now = std::chrono::steady_clock::now();
+
 		if((now - tokenReducedTimestamp) > rttInfo.average){
 			tokenReducedTimestamp = now;
-			
 			if(isSlowStart){
-				tokensMux.lock();
 				tokens -= tokensMax*(1 - rttInfo.min/rttInfo.average);
 				std::cout << "Tokens Max reduced from : " << tokensMax;
 				tokensMax -= tokensMax*(1 - rttInfo.min/rttInfo.average);
+				isSlowStart = false;	
 			}
-			std::cout << " to " << tokensMax << std::endl;
-
 			tokensMux.unlock();
 		}
 
 
-		isSlowStart = false;	
 
 		blockLostFrom->blockInfoMutex.unlock();
 
@@ -524,7 +525,7 @@ public:
 
 		// Create and encoder and accociate it with the data
 		kodocpp::encoder_factory encoder_factory(
-			kodocpp::codec::full_vector,
+			kodocpp::codec::reed_solomon,
 			kodocpp::field::binary8,
 			numberOfPacketsInBlock,
 			PACKET_SIZE);
@@ -598,19 +599,23 @@ int SenderManager::getDataSize(){
 }
 
 int main(){
-	std::cout << "It has begun" << std::endl;
 	srand(time(NULL));
-	std::vector<uint8_t> dataToSend(10000*PACKET_SIZE);
+
+	// Create some random data to send	
+	std::vector<uint8_t> dataToSend(1000*PACKET_SIZE);
 	std::generate(dataToSend.begin(), dataToSend.end(), rand);
 	dataToSend[0] = 0; dataToSend[1] = 0; dataToSend[2] = 0;
 
+	// Create a manager to send the data
 	SenderManager manager(dataToSend);
 
 	SenderFlowManager flow1(FLOW1_SOURCE, FLOW1_DEST, manager);
 	SenderFlowManager flow2(FLOW2_SOURCE, FLOW2_DEST, manager);
+	SenderFlowManager flow3(FLOW3_SOURCE, FLOW3_DEST, manager);
 	
 	manager.addSubflow(&flow1);
-	manager.addSubflow(&flow2);
+	//manager.addSubflow(&flow2);
+	//manager.addSubflow(&flow3);
 
 	std::cout << "manager subflows size" << manager.getSubflows().size() 
 		<< std::endl;
@@ -619,6 +624,7 @@ int main(){
 			&SenderFlowManager::tokensMaxThreadPrinter,
 			&flow1,
 			"tokensMaxOutPut.cvv");
+
 	std::thread flow1SendThread(
 		&SenderFlowManager::sendLoop, &flow1);
 	std::thread flow1RecieveThread(
@@ -632,13 +638,23 @@ int main(){
 //		&SenderFlowManager::recieveAndProcessAcks, &flow2);
 //	std::thread flow2LossDetectThread(
 //			&SenderFlowManager::checkForLosses, &flow2);
-
-
+//
+//	std::thread flow3SendThread(
+//		&SenderFlowManager::sendLoop, &flow3);
+//	std::thread flow3RecieveThread(
+//		&SenderFlowManager::recieveAndProcessAcks, &flow3);
+//	std::thread flow3LossDetectThread(
+//			&SenderFlowManager::checkForLosses, &flow3);
+//
 	maxTokensOutputThread.join();
+
 	flow1SendThread.join();
 	flow1RecieveThread.join();
 
 //	flow2SendThread.join();
 //	flow2RecieveThread.join();
+//	
+//	flow3SendThread.join();
+//	flow3RecieveThread.join();
 }
 
